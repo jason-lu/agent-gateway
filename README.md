@@ -145,6 +145,14 @@ String reply = client.chat(List.of(
         ChatMessage.user("Bye")));
 ```
 
+Tool results use `role: "tool"` and carry the matching `tool_call_id`:
+
+```java
+memory.addUser("run ls");
+memory.addTool("file1\nfile2", "call_abc");
+// or: ChatMessage.tool("file1\nfile2", "call_abc")
+```
+
 `ConversationMemory.withUser(...)` builds the request payload without mutating history; call `addUser` / `addAssistant` only after a successful reply so failed turns are not remembered.
 
 Explicit config:

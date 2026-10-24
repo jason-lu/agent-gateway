@@ -143,6 +143,9 @@ public class LlmClient {
             JsonObject item = new JsonObject();
             item.addProperty("role", message.role());
             item.addProperty("content", message.content());
+            if (message.toolCallId() != null) {
+                item.addProperty("tool_call_id", message.toolCallId());
+            }
             array.add(item);
         }
 

@@ -34,6 +34,15 @@ public final class ConversationMemory {
     }
 
     /**
+     * Appends a tool result turn.
+     * {@code toolCallId} must match the assistant tool call this result answers.
+     */
+    public ConversationMemory addTool(String content, String toolCallId) {
+        history.add(ChatMessage.tool(content, toolCallId));
+        return this;
+    }
+
+    /**
      * Returns the stored history plus a new user message, without mutating this memory.
      * Use this to build the request payload, then {@link #addUser} / {@link #addAssistant}
      * only after the LLM call succeeds.

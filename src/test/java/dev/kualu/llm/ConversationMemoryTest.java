@@ -73,8 +73,26 @@ class ConversationMemoryTest {
         assertEquals("user", ChatMessage.user("x").role());
         assertEquals("assistant", ChatMessage.assistant("x").role());
         assertEquals("system", ChatMessage.system("x").role());
+        assertEquals("tool", ChatMessage.tool("x", "call_1").role());
+        assertEquals("call_1", ChatMessage.tool("x", "call_1").toolCallId());
+        assertEquals(null, ChatMessage.user("x").toolCallId());
         assertThrows(NullPointerException.class, () -> new ChatMessage(null, "x"));
         assertThrows(NullPointerException.class, () -> new ChatMessage("user", null));
         assertThrows(IllegalArgumentException.class, () -> new ChatMessage(" ", "x"));
+        assertThrows(NullPointerException.class, () -> ChatMessage.tool("x", null));
+        assertThrows(IllegalArgumentException.class, () -> ChatMessage.tool("x", " "));
+    }
+
+    @Test
+    void addTool_storesToolCallId() {
+        ConversationMemory memory = new ConversationMemory()
+                .addUser("run ls")
+                .addTool("file1\nfile2", "call_abc");
+
+        List<ChatMessage> messages = memory.messages();
+        assertEquals(2, messages.size());
+        assertEquals("tool", messages.get(1).role());
+        assertEquals("call_abc", messages.get(1).toolCallId());
+        assertEquals("file1\nfile2", messages.get(1).content());
     }
 }

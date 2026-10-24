@@ -346,6 +346,23 @@ class LlmClientTest {
     }
 
     @Test
+    void chat_withToolMessage_sendsToolCallId() {
+        LlmClient client = new LlmClient(config);
+
+        client.chat(List.of(
+                ChatMessage.user("run ls"),
+                ChatMessage.tool("file1\nfile2", "call_abc")));
+
+        JsonObject body = JsonParser.parseString(capturedBody.get()).getAsJsonObject();
+        var messages = body.getAsJsonArray("messages");
+        assertEquals(2, messages.size());
+        assertEquals("tool", messages.get(1).getAsJsonObject().get("role").getAsString());
+        assertEquals("file1\nfile2", messages.get(1).getAsJsonObject().get("content").getAsString());
+        assertEquals("call_abc", messages.get(1).getAsJsonObject().get("tool_call_id").getAsString());
+        assertFalse(messages.get(0).getAsJsonObject().has("tool_call_id"));
+    }
+
+    @Test
     void chat_blankMessageContent_throws() {
         LlmClient client = new LlmClient(config);
         assertThrows(LlmException.class, () -> client.chat(List.of(ChatMessage.user(" "))));
