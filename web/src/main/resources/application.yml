@@ -1,0 +1,24 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  application:
+    name: agent-web
+
+llm:
+  base-url: ${LLM_BASE_URL:${BASE_URL:}}
+  api-key: ${LLM_API_KEY:${API_KEY:}}
+  model: ${LLM_MODEL:${MODEL:}}
+
+agent:
+  security:
+    jwt-secret: ${AGENT_JWT_SECRET:}
+    jwt-ttl: ${AGENT_JWT_TTL:2h}
+    users:
+      - username: ${AGENT_ADMIN_USERNAME:admin}
+        password: ${AGENT_ADMIN_PASSWORD:change-me}
+        roles: [USER, ADMIN]
+
+logging:
+  level:
+    root: INFO

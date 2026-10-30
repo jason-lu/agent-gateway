@@ -1,0 +1,81 @@
+package dev.kualu.web.chat;
+
+import dev.kualu.llm.LlmClient;
+import dev.kualu.llm.LlmException;
+import dev.kualu.web.api.ApiDtos.HistoryMessage;
+import dev.kualu.web.config.LlmProperties;
+import dev.kualu.web.session.Session;
+import dev.kualu.web.session.SessionStore;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.stereotype.Service;
+
+import java.util.List;
+import java.util.function.Consumer;
+
+/**
+ * Turns HTTP chat operations into llm-core calls and session updates.
+ */
+@Service
+public class ChatService {
+
+    private final SessionStore sessionStore;
+    private final LlmClient llmClient;
+    private final LlmProperties llmProperties;
+
+    public ChatService(
+            SessionStore sessionStore,
+            ObjectProvider<LlmClient> llmClients,
+            LlmProperties llmProperties) {
+        this.sessionStore = sessionStore;
+        this.llmClient = llmClients.getIfAvailable();
+        this.llmProperties = llmProperties;
+    }
+
+    public boolean isLlmConfigured() {
+        return llmProperties.isConfigured() && llmClient != null;
+    }
+
+    public String chat(Session session, String content) {
+        requireLlm();
+        // ConversationMemory is not thread-safe; serialize turns per session.
+        synchronized (session.memory()) {
+            try {
+                String reply = llmClient.chat(session.memory().withUser(content));
+                session.memory().addUser(content).addAssistant(reply);
+                sessionStore.update(session);
+                return reply;
+            } catch (LlmException ex) {
+                throw new UpstreamLlmException(ex.getMessage(), ex);
+            }
+        }
+    }
+
+    public String chatStream(Session session, String content, Consumer<String> onDelta) {
+        requireLlm();
+        synchronized (session.memory()) {
+            try {
+                String reply = llmClient.chatStream(session.memory().withUser(content), onDelta);
+                session.memory().addUser(content).addAssistant(reply);
+                sessionStore.update(session);
+                return reply;
+            } catch (LlmException ex) {
+                throw new UpstreamLlmException(ex.getMessage(), ex);
+            }
+        }
+    }
+
+    public List<HistoryMessage> history(Session session) {
+        synchronized (session.memory()) {
+            return session.memory().messages().stream()
+                    .filter(message -> "user".equals(message.role()) || "assistant".equals(message.role()))
+                    .map(message -> new HistoryMessage(message.role(), message.content()))
+                    .toList();
+        }
+    }
+
+    private void requireLlm() {
+        if (!isLlmConfigured()) {
+            throw new LlmNotConfiguredException("LLM is not configured");
+        }
+    }
+}

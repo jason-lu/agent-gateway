@@ -1,35 +1,23 @@
 plugins {
-    id("java")
-    id("application")
+    java
+    id("org.springframework.boot") version "3.5.7" apply false
+    id("io.spring.dependency-management") version "1.1.7" apply false
 }
 
-group = "dev.kualu"
-version = "1.0-SNAPSHOT"
+allprojects {
+    group = "dev.kualu"
+    version = "1.0-SNAPSHOT"
+}
 
-java {
-    toolchain {
-        languageVersion = JavaLanguageVersion.of(25)
+subprojects {
+    repositories {
+        mavenCentral()
     }
-    modularity.inferModulePath.set(true)
 }
 
-application {
-    mainClass = "dev.kualu.Main"
-    mainModule = "dev.kualu.agent"
-}
-
-repositories {
-    mavenCentral()
-}
-
-dependencies {
-    implementation("com.google.code.gson:gson:2.13.1")
-
-    testImplementation(platform("org.junit:junit-bom:6.0.0"))
-    testImplementation("org.junit.jupiter:junit-jupiter")
-    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
-}
-
-tasks.test {
-    useJUnitPlatform()
+// Back-compat: `./gradlew run` launches the CLI, same as `./gradlew :cli:run`.
+tasks.register("run") {
+    group = "application"
+    description = "Run the interactive CLI chat console"
+    dependsOn(":cli:run")
 }
