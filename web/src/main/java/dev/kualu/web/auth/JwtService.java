@@ -23,11 +23,12 @@ public class JwtService {
         this.properties = properties;
         String secret = properties.jwtSecret();
         if (secret == null || secret.isBlank()) {
-            throw new IllegalStateException(
+            throw new JwtSecretMissingException(
                     "agent.security.jwt-secret (or AGENT_JWT_SECRET) must be configured");
         }
         if (secret.length() < 32) {
-            throw new IllegalStateException("agent.security.jwt-secret must be at least 32 characters");
+            throw new JwtSecretMissingException(
+                    "agent.security.jwt-secret must be at least 32 characters (got " + secret.length() + ")");
         }
         this.key = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
     }
