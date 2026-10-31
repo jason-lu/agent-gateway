@@ -59,6 +59,17 @@ public final class ConversationMemory {
         return Collections.unmodifiableList(List.copyOf(history));
     }
 
+    /**
+     * Replaces the stored turns wholesale (defensive copy). Used by memory
+     * compression to fold older turns into a summary message.
+     */
+    public ConversationMemory replaceAll(List<ChatMessage> newHistory) {
+        List<ChatMessage> copy = List.copyOf(newHistory);
+        history.clear();
+        history.addAll(copy);
+        return this;
+    }
+
     /** Number of stored turns (system + user + assistant). */
     public int size() {
         return history.size();

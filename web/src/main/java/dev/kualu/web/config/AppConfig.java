@@ -3,10 +3,13 @@ package dev.kualu.web.config;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.kualu.llm.LlmClient;
 import dev.kualu.llm.LlmConfig;
+import dev.kualu.llm.MemoryCompressor;
 import dev.kualu.web.api.ApiDtos.ErrorResponse;
 import dev.kualu.web.auth.JwtAuthenticationFilter;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
@@ -30,6 +33,8 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 @Configuration
 @EnableMethodSecurity
 public class AppConfig {
+
+    private static final Logger log = LoggerFactory.getLogger(AppConfig.class);
 
     @Bean
     public PasswordEncoder passwordEncoder() {
@@ -81,6 +86,22 @@ public class AppConfig {
             return null;
         }
         return new LlmClient(new LlmConfig(properties.baseUrl(), properties.apiKey(), properties.model()));
+    }
+
+    @Bean
+    public MemoryCompressor memoryCompressor(LlmClient llmClient, MemoryProperties properties) {
+        if (!properties.enabled()) {
+            log.info("memory-compress configured: enabled=false");
+            return null;
+        }
+        if (llmClient == null) {
+            log.info("memory-compress configured: enabled=true but llm is not configured; compressor inactive");
+            return null;
+        }
+        log.info("memory-compress configured: enabled=true, max-messages={}, keep-messages={}",
+                properties.maxMessages(), properties.keepMessages());
+        return new MemoryCompressor(
+                llmClient, properties.maxMessages(), properties.keepMessages(), properties.instruction());
     }
 
     private static AccessDeniedHandler accessDeniedHandler(ObjectMapper objectMapper) {

@@ -95,4 +95,57 @@ class ConversationMemoryTest {
         assertEquals("call_abc", messages.get(1).toolCallId());
         assertEquals("file1\nfile2", messages.get(1).content());
     }
+
+    @Test
+    void replaceAll_replacesStoredTurns() {
+        ConversationMemory memory = new ConversationMemory()
+                .addUser("old")
+                .addAssistant("old reply");
+
+        memory.replaceAll(List.of(
+                ChatMessage.system("be brief"),
+                ChatMessage.user("kept"),
+                ChatMessage.assistant("kept reply")));
+
+        List<ChatMessage> messages = memory.messages();
+        assertEquals(3, memory.size());
+        assertEquals("system", messages.get(0).role());
+        assertEquals("kept", messages.get(1).content());
+        assertEquals("kept reply", messages.get(2).content());
+    }
+
+    @Test
+    void replaceAll_defensivelyCopiesInput() {
+        ConversationMemory memory = new ConversationMemory().addUser("hi");
+
+        List<ChatMessage> replacement = new java.util.ArrayList<>();
+        replacement.add(ChatMessage.user("first"));
+        memory.replaceAll(replacement);
+        replacement.add(ChatMessage.user("mutated after replace"));
+
+        assertEquals(1, memory.size());
+        assertEquals("first", memory.messages().get(0).content());
+    }
+
+    @Test
+    void replaceAll_acceptsEmptyList() {
+        ConversationMemory memory = new ConversationMemory()
+                .addUser("hi")
+                .addAssistant("hello");
+
+        memory.replaceAll(List.of());
+
+        assertEquals(0, memory.size());
+        assertTrue(memory.messages().isEmpty());
+    }
+
+    @Test
+    void replaceAll_rejectsNull() {
+        ConversationMemory memory = new ConversationMemory().addUser("hi");
+
+        assertThrows(NullPointerException.class, () -> memory.replaceAll(null));
+        assertThrows(NullPointerException.class,
+                () -> memory.replaceAll(java.util.Arrays.asList(ChatMessage.user("a"), null)));
+        assertEquals(1, memory.size());
+    }
 }

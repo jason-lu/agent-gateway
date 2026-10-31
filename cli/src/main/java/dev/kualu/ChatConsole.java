@@ -4,6 +4,7 @@ import dev.kualu.llm.ChatMessage;
 import dev.kualu.llm.ConversationMemory;
 import dev.kualu.llm.LlmClient;
 import dev.kualu.llm.LlmException;
+import dev.kualu.llm.MemoryCompressor;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -27,13 +28,22 @@ public class ChatConsole {
     private final BufferedReader in;
     private final PrintStream out;
     private final ConversationMemory memory;
+    private final MemoryCompressor compressor;
     private boolean streaming;
 
+    /** Runs without memory compression. */
     public ChatConsole(LlmClient client, BufferedReader in, PrintStream out, boolean streaming) {
+        this(client, in, out, streaming, null);
+    }
+
+    /** @param compressor folds old turns into a summary; {@code null} disables compression */
+    public ChatConsole(LlmClient client, BufferedReader in, PrintStream out, boolean streaming,
+                       MemoryCompressor compressor) {
         this.client = Objects.requireNonNull(client, "client");
         this.in = Objects.requireNonNull(in, "in");
         this.out = Objects.requireNonNull(out, "out");
         this.memory = new ConversationMemory();
+        this.compressor = compressor;
         this.streaming = streaming;
     }
 
@@ -154,7 +164,10 @@ public class ChatConsole {
     }
 
     private void printHistory() {
-        List<ChatMessage> messages = memory.messages();
+        List<ChatMessage> messages = memory.messages().stream()
+                .filter(message -> !"system".equals(message.role())
+                        || !message.content().startsWith(MemoryCompressor.SUMMARY_PREFIX))
+                .toList();
         if (messages.isEmpty()) {
             out.println("Memory is empty.");
             return;
@@ -172,6 +185,9 @@ public class ChatConsole {
     }
 
     private void sendToLlm(String message) {
+        if (compressor != null) {
+            compressor.maybeCompress(memory, "cli");
+        }
         List<ChatMessage> payload = memory.withUser(message);
         out.print("assistant: ");
         out.flush();

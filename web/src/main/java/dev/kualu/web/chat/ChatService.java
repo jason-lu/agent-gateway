@@ -2,6 +2,7 @@ package dev.kualu.web.chat;
 
 import dev.kualu.llm.LlmClient;
 import dev.kualu.llm.LlmException;
+import dev.kualu.llm.MemoryCompressor;
 import dev.kualu.web.api.ApiDtos.HistoryMessage;
 import dev.kualu.web.config.LlmProperties;
 import dev.kualu.web.session.Session;
@@ -20,14 +21,17 @@ public class ChatService {
 
     private final SessionStore sessionStore;
     private final LlmClient llmClient;
+    private final MemoryCompressor compressor;
     private final LlmProperties llmProperties;
 
     public ChatService(
             SessionStore sessionStore,
             ObjectProvider<LlmClient> llmClients,
+            ObjectProvider<MemoryCompressor> compressors,
             LlmProperties llmProperties) {
         this.sessionStore = sessionStore;
         this.llmClient = llmClients.getIfAvailable();
+        this.compressor = compressors.getIfAvailable();
         this.llmProperties = llmProperties;
     }
 
@@ -40,6 +44,7 @@ public class ChatService {
         // ConversationMemory is not thread-safe; serialize turns per session.
         synchronized (session.memory()) {
             try {
+                compress(session);
                 String reply = llmClient.chat(session.memory().withUser(content));
                 session.memory().addUser(content).addAssistant(reply);
                 sessionStore.update(session);
@@ -54,6 +59,7 @@ public class ChatService {
         requireLlm();
         synchronized (session.memory()) {
             try {
+                compress(session);
                 String reply = llmClient.chatStream(session.memory().withUser(content), onDelta);
                 session.memory().addUser(content).addAssistant(reply);
                 sessionStore.update(session);
@@ -70,6 +76,13 @@ public class ChatService {
                     .filter(message -> "user".equals(message.role()) || "assistant".equals(message.role()))
                     .map(message -> new HistoryMessage(message.role(), message.content()))
                     .toList();
+        }
+    }
+
+    /** Best-effort compression before the payload is built; never blocks the turn. */
+    private void compress(Session session) {
+        if (compressor != null) {
+            compressor.maybeCompress(session.memory(), "session=" + session.id());
         }
     }
 

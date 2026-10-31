@@ -38,6 +38,7 @@ class ChatServiceStreamTest {
         ChatService service = new ChatService(
                 store,
                 provider(client),
+                emptyCompressorProvider(),
                 new LlmProperties("http://localhost", "key", "model"));
 
         List<String> deltas = new ArrayList<>();
@@ -59,6 +60,7 @@ class ChatServiceStreamTest {
         ChatService service = new ChatService(
                 store,
                 provider(client),
+                emptyCompressorProvider(),
                 new LlmProperties("http://localhost", "key", "model"));
 
         try {
@@ -74,5 +76,10 @@ class ChatServiceStreamTest {
         var provider = mock(org.springframework.beans.factory.ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(client);
         return provider;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static org.springframework.beans.factory.ObjectProvider<dev.kualu.llm.MemoryCompressor> emptyCompressorProvider() {
+        return mock(org.springframework.beans.factory.ObjectProvider.class);
     }
 }

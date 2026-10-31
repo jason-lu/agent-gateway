@@ -1,0 +1,11 @@
+You are compressing chat history into a durable working summary so the
+assistant can continue the work without seeing the original turns.
+
+Preserve:
+- the user's current goal and constraints
+- key decisions and the reasons behind them
+- concrete facts: names, file paths, IDs, commands, versions, error text
+- what has already been done, and what remains open
+
+Write in the same language as the conversation. Be dense and specific;
+drop pleasantries and repetition. Output only the summary text — no preamble.

@@ -46,16 +46,6 @@ class ChatConsoleTest {
         }
     }
 
-    private static String run(FakeLlmClient client, String input, boolean streaming) {
-        BufferedReader in = new BufferedReader(
-                new InputStreamReader(new ByteArrayInputStream(input.getBytes(StandardCharsets.UTF_8)),
-                        StandardCharsets.UTF_8));
-        ByteArrayOutputStream buf = new ByteArrayOutputStream();
-        PrintStream out = new PrintStream(buf, true, StandardCharsets.UTF_8);
-        new ChatConsole(client, in, out, streaming).run();
-        return buf.toString(StandardCharsets.UTF_8);
-    }
-
     private static String lastUser(List<ChatMessage> messages) {
         return messages.get(messages.size() - 1).content();
     }
@@ -276,5 +266,97 @@ class ChatConsoleTest {
         // second call: still only the retry user message — failed turn was not stored
         assertEquals(1, client.chatCalls.get(1).size());
         assertEquals("retry", lastUser(client.chatCalls.get(1)));
+    }
+
+    /** Answers summarisation prompts with a fixed summary and turns with {@code ok}. */
+    private static final class CompressingLlm extends LlmClient {
+        final List<List<ChatMessage>> streamCalls = new ArrayList<>();
+        final List<List<ChatMessage>> summarizeCalls = new ArrayList<>();
+
+        CompressingLlm() {
+            super(new LlmConfig("http://test.local/v1", "key", "test-model"));
+        }
+
+        @Override
+        public String chat(List<ChatMessage> messages) {
+            summarizeCalls.add(messages);
+            return "SUMMARY-TEXT";
+        }
+
+        @Override
+        public String chatStream(List<ChatMessage> messages, Consumer<String> onDelta) {
+            streamCalls.add(messages);
+            onDelta.accept("ok");
+            return "ok";
+        }
+    }
+
+    private static String run(FakeLlmClient client, String input, boolean streaming) {
+        return runWith(client, input, streaming, null);
+    }
+
+    private static String runWith(LlmClient client, String input, boolean streaming,
+                                  dev.kualu.llm.MemoryCompressor compressor) {
+        BufferedReader in = new BufferedReader(
+                new InputStreamReader(new ByteArrayInputStream(input.getBytes(StandardCharsets.UTF_8)),
+                        StandardCharsets.UTF_8));
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        PrintStream out = new PrintStream(buf, true, StandardCharsets.UTF_8);
+        new ChatConsole(client, in, out, streaming, compressor).run();
+        return buf.toString(StandardCharsets.UTF_8);
+    }
+
+    @Test
+    void longConversation_compressesBeforeBuildingThePayload() {
+        CompressingLlm client = new CompressingLlm();
+        dev.kualu.llm.MemoryCompressor compressor = new dev.kualu.llm.MemoryCompressor(client, 6, 2, null);
+
+        StringBuilder input = new StringBuilder();
+        for (int i = 0; i < 5; i++) {
+            input.append("turn-").append(i).append('\n');
+        }
+        input.append("/quit\n");
+        runWith(client, input.toString(), true, compressor);
+
+        assertEquals(1, client.summarizeCalls.size());
+        // The fifth turn already sees a compressed payload.
+        List<ChatMessage> lastPayload = client.streamCalls.get(client.streamCalls.size() - 1);
+        assertTrue(lastPayload.stream()
+                        .anyMatch(m -> m.content().startsWith(dev.kualu.llm.MemoryCompressor.SUMMARY_PREFIX)),
+                "the last payload must already carry the summary");
+    }
+
+    @Test
+    void history_hidesTheCompressionSummary() {
+        CompressingLlm client = new CompressingLlm();
+        dev.kualu.llm.MemoryCompressor compressor = new dev.kualu.llm.MemoryCompressor(client, 6, 2, null);
+
+        StringBuilder input = new StringBuilder();
+        for (int i = 0; i < 5; i++) {
+            input.append("turn-").append(i).append('\n');
+        }
+        input.append("/history\n/quit\n");
+        String output = runWith(client, input.toString(), true, compressor);
+
+        assertFalse(output.contains(dev.kualu.llm.MemoryCompressor.SUMMARY_PREFIX));
+        assertFalse(output.contains("SUMMARY-TEXT"));
+    }
+
+    @Test
+    void history_stillShowsNonSystemTurnsThatStartWithTheMarker() {
+        FakeLlmClient client = new FakeLlmClient() {
+            @Override
+            public String chatStream(List<ChatMessage> messages, Consumer<String> onDelta) {
+                streamCalls.add(messages);
+                onDelta.accept("ok");
+                return "ok";
+            }
+        };
+
+        String output = run(client, dev.kualu.llm.MemoryCompressor.SUMMARY_PREFIX + "user text\n/history\n/quit\n", true);
+
+        // Only the summary *system* message is hidden; a user turn with the same
+        // prefix is ordinary content and must stay visible.
+        assertTrue(output.contains("[user] " + dev.kualu.llm.MemoryCompressor.SUMMARY_PREFIX + "user text"));
     }
 }

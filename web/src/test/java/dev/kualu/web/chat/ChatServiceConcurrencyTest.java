@@ -35,6 +35,7 @@ class ChatServiceConcurrencyTest {
         ChatService service = new ChatService(
                 store,
                 provider(client),
+                emptyCompressorProvider(),
                 new LlmProperties("http://localhost", "key", "model"));
 
         int workers = 8;
@@ -75,5 +76,10 @@ class ChatServiceConcurrencyTest {
         var provider = mock(org.springframework.beans.factory.ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(client);
         return provider;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static org.springframework.beans.factory.ObjectProvider<dev.kualu.llm.MemoryCompressor> emptyCompressorProvider() {
+        return mock(org.springframework.beans.factory.ObjectProvider.class);
     }
 }

@@ -36,6 +36,10 @@ Credentials are read from **environment variables first**, then from a `.env` fi
 | JWT secret | `AGENT_JWT_SECRET` | — | `agent.security.jwt-secret` (min 32 chars, required to start web) |
 | JWT TTL | `AGENT_JWT_TTL` | — | `agent.security.jwt-ttl` (default `2h`) |
 | Admin user | `AGENT_ADMIN_USERNAME` / `AGENT_ADMIN_PASSWORD` | — | `agent.security.users` |
+| Memory compression | `AGENT_MEMORY_ENABLED` | — | `agent.memory.enabled` (default `true`) |
+| Compression threshold | `AGENT_MEMORY_MAX_MESSAGES` | — | `agent.memory.max-messages` (default `20`) |
+| Turns kept verbatim | `AGENT_MEMORY_KEEP_MESSAGES` | — | `agent.memory.keep-messages` (default `8`) |
+| Summary instruction | `AGENT_MEMORY_INSTRUCTION` | — | `agent.memory.instruction` (default: `summarize-instruction.txt`) |
 
 Copy the example file and fill in real values:
 
@@ -82,6 +86,30 @@ Options:
 | `/quit` / `/exit` | Leave |
 
 The console keeps multi-turn memory in session: each message is sent with prior user/assistant turns so the model has context. `/clear` starts a fresh conversation.
+
+### Memory compression
+
+By default the full history is sent with every request, so long conversations grow without bound. Enable compression (on by default) to keep the payload bounded:
+
+- When the history passes `max-messages` (default 20), the oldest turns are folded into a single summary message.
+- The most recent `keep-messages` turns (default 8) always stay verbatim; the cut never splits a turn and never orphans a tool result.
+- The summary is regenerated incrementally — the previous summary plus the turns that just aged out — so the cost does not grow with the conversation.
+- Layout: `[system prompt][summary][recent turns]`. The summary carries the `【历史对话摘要】` marker and is hidden from `/history` and from `GET /api/v1/sessions/{id}/messages`.
+- Compression runs before the request is built, so the current turn already sees the bounded payload. If the summarisation call fails the history is left untouched and the turn proceeds normally.
+
+The summarisation prompt lives in its own file so it can be tuned without touching code:
+`llm-core/src/main/resources/dev/kualu/llm/summarize-instruction.txt`. Override it per deployment with `AGENT_MEMORY_INSTRUCTION` / `agent.memory.instruction` (a blank value falls back to the file).
+
+Logs (slf4j; `web` uses logback, `cli` prints to stderr via `slf4j-simple`):
+
+| Event | Level |
+|---|---|
+| Compression succeeded (`size 24 -> 12 (dropped 14, …)`) | `INFO` |
+| Summarisation failed, history unchanged | `WARN` |
+| Skipped (no legal cut point) | `DEBUG` |
+| Thresholds loaded at startup | `INFO` |
+
+Thresholds are validated at startup: `keep-messages >= 2` and `max-messages > keep-messages + 2`, otherwise the process refuses to start.
 
 Only the exact command names above are intercepted. Everything else is chat input — including absolute paths (`/usr/lib/jvm/jdk-21.0.5+11/bin/java`), fractions (`1/2`), and other text that contains `/`.
 
@@ -225,6 +253,17 @@ memory.addTool("file1\nfile2", "call_abc");
 
 `ConversationMemory.withUser(...)` builds the request payload without mutating history; call `addUser` / `addAssistant` only after a successful reply so failed turns are not remembered.
 
+To keep the payload bounded over a long session, wrap the memory with `MemoryCompressor` (see [Memory compression](#memory-compression)):
+
+```java
+import dev.kualu.llm.MemoryCompressor;
+
+MemoryCompressor compressor = new MemoryCompressor(client, 20, 8, null);
+// before each request:
+compressor.maybeCompress(memory, "session=abc");
+List<ChatMessage> payload = memory.withUser(user);
+```
+
 Explicit config:
 
 ```java
@@ -272,4 +311,4 @@ module your.app {
 ./gradlew test
 ```
 
-Covers HTTP client, LLM config/`chat`/`chatStream` (including multi-turn message lists, SSE, and error paths), conversation memory, console commands, session store isolation, JWT login/security, and REST session/message APIs.
+Covers HTTP client, LLM config/`chat`/`chatStream` (including multi-turn message lists, SSE, and error paths), conversation memory, memory compression (layout, incremental summary, cut-point safety, failure handling), console commands, session store isolation, JWT login/security, and REST session/message APIs.
