@@ -1,6 +1,6 @@
 package dev.kualu.web.session;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import dev.kualu.llm.ChatMessage;
 import dev.kualu.web.auth.JdbcUserDetailsService;
 import dev.kualu.web.auth.JdbcUserSeeder;

@@ -1,6 +1,6 @@
 package dev.kualu.web.config;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import dev.kualu.web.auth.JdbcUserDetailsService;

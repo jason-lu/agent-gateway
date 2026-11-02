@@ -1,6 +1,6 @@
 package dev.kualu.web.config;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import dev.kualu.llm.LlmClient;
 import dev.kualu.llm.LlmConfig;
 import dev.kualu.llm.MemoryCompressor;

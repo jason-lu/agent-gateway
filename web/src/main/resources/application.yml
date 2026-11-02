@@ -8,7 +8,7 @@ spring:
   # Excluding auto-configuration keeps agent.store=memory from ever touching a database.
   autoconfigure:
     exclude:
-      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
   flyway:
     enabled: true
     schemas: agent

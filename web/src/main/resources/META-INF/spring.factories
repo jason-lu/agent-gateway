@@ -1,2 +1,1 @@
-org.springframework.boot.diagnostics.FailureAnalyzer=dev.kualu.web.auth.JwtSecretFailureAnalyzer
-org.springframework.boot.env.EnvironmentPostProcessor=dev.kualu.web.config.DotenvEnvironmentPostProcessor
+org.springframework.boot.EnvironmentPostProcessor=dev.kualu.web.config.DotenvEnvironmentPostProcessor
