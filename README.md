@@ -149,12 +149,24 @@ Response:
 Users and roles are configured under `agent.security.users` (see `web/src/main/resources/application.yml`).
 Roles: `USER` (sessions/chat), `ADMIN` (adds `GET /api/v1/admin/users`).
 
+Change your own password (requires a Bearer token):
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/api/v1/auth/change-password \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"currentPassword":"old-password","newPassword":"at-least-8-chars"}'
+```
+
+New passwords need at least 8 characters; a wrong `currentPassword` is `400`. Already-issued JWTs are stateless and stay valid until expiry — only future logins use the new password. With `agent.store=memory` the change lasts until restart; with `agent.store=postgres` it is written to `agent.users` and survives restarts.
+
 ### API
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | GET | `/api/v1/health` | public | `{status, llmConfigured}` |
 | POST | `/api/v1/auth/login` | public | Issue JWT |
+| POST | `/api/v1/auth/change-password` | USER | `{currentPassword, newPassword}` → `204` |
 | GET | `/api/v1/sessions` | USER | List your sessions |
 | POST | `/api/v1/sessions` | USER | Create session `{systemPrompt?}` |
 | GET | `/api/v1/sessions/{id}` | USER | Session metadata |
@@ -182,7 +194,7 @@ By default (`agent.store=postgres`) users and conversations live in PostgreSQL:
 | `agent.sessions` | `id`, `owner` (FK to users), `created_at`, `messages jsonb` |
 
 - **Schema** is managed by Flyway (`web/src/main/resources/db/migration`), applied at startup in the `agent` schema. Never edit a shipped migration — add `V2__*.sql` instead.
-- **Users** are seeded from `agent.security.users` on first start only (`insert … on conflict do nothing`). After that the database is the source of truth: a password or role changed by hand is never overwritten, and removing a user from config does not delete the account. Changing a password or adding a user is SQL for now — there is no admin API yet.
+- **Users** are seeded from `agent.security.users` on first start only (`insert … on conflict do nothing`). After that the database is the source of truth: a password or role changed by hand is never overwritten, and removing a user from config does not delete the account. Changing your own password is `POST /api/v1/auth/change-password` (see [Auth](#auth)); adding a user or resetting someone else's password is SQL for now — there is no admin API for that yet.
 - **The whole conversation** (including any [compression summary](#memory-compression)) is stored as one ordered JSON array per session, so a restart resumes exactly where it left off.
 - **Credentials never live in source.** Put `AGENT_DB_PASSWORD` in `.env` (gitignored) or the environment. The URL must state its TLS intent (`sslmode=require`) because the password would otherwise cross the network in plaintext.
 - **`agent.store=memory`** reverts to process-local storage: no database is contacted at all, and the app warns loudly at startup. Intended for local experiments and tests only.

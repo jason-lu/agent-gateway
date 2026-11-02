@@ -32,6 +32,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "agent.security.users[0].username=alice",
         "agent.security.users[0].password=password123",
         "agent.security.users[0].roles[0]=USER",
+        "agent.security.users[1].username=carol",
+        "agent.security.users[1].password=password123",
+        "agent.security.users[1].roles[0]=USER",
         "llm.base-url=http://localhost",
         "llm.api-key=test",
         "llm.model=test-model"
@@ -119,5 +122,34 @@ class PostgresWebSmokeTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"username\":\"alice\",\"password\":\"wrong\"}"))
                 .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void changePassword_isWrittenToTheDatabase() throws Exception {
+        // carol is reserved for this test so alice's seeded password survives method order.
+        String token = mockMvc.perform(post("/api/v1/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"carol\",\"password\":\"password123\"}"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String jwt = com.jayway.jsonpath.JsonPath.read(token, "$.token");
+
+        mockMvc.perform(post("/api/v1/auth/change-password")
+                        .header("Authorization", "Bearer " + jwt)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"currentPassword\":\"password123\",\"newPassword\":\"new-secret-99\"}"))
+                .andExpect(status().isNoContent());
+
+        // Verified through a fresh authentication, which reads agent.users.
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"carol\",\"password\":\"password123\"}"))
+                .andExpect(status().isUnauthorized());
+
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"carol\",\"password\":\"new-secret-99\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.token").isNotEmpty());
     }
 }

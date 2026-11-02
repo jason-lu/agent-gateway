@@ -5,6 +5,7 @@ import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import dev.kualu.web.auth.JdbcUserDetailsService;
 import dev.kualu.web.auth.JdbcUserSeeder;
+import dev.kualu.web.auth.UserPasswordStore;
 import dev.kualu.web.session.ChatMessageCodec;
 import dev.kualu.web.session.PostgresSessionStore;
 import dev.kualu.web.session.SessionStore;
@@ -61,6 +62,13 @@ public class PostgresConfig {
     @Bean
     public UserDetailsService userDetailsService(JdbcTemplate jdbc) {
         return new JdbcUserDetailsService(jdbc);
+    }
+
+    @Bean
+    public UserPasswordStore userPasswordStore(JdbcTemplate jdbc) {
+        return (username, encodedPassword) -> jdbc.update(
+                "update agent.users set password_hash = ? where username = ?",
+                encodedPassword, username);
     }
 
     /** Runs after Flyway so the tables exist. See {@link JdbcUserSeeder} for the semantics. */

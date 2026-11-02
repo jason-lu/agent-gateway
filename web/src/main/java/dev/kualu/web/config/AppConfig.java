@@ -6,6 +6,7 @@ import dev.kualu.llm.LlmConfig;
 import dev.kualu.llm.MemoryCompressor;
 import dev.kualu.web.api.ApiDtos.ErrorResponse;
 import dev.kualu.web.auth.JwtAuthenticationFilter;
+import dev.kualu.web.auth.UserPasswordStore;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
@@ -23,7 +24,6 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.core.userdetails.User;
-import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.factory.PasswordEncoderFactories;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.provisioning.InMemoryUserDetailsManager;
@@ -45,10 +45,11 @@ public class AppConfig {
     /**
      * Config-backed users, used when {@code agent.store=memory}. The postgres profile
      * authenticates against {@code agent.users} instead (see {@link PostgresConfig}).
+     * {@code InMemoryUserDetailsManager} is itself the {@link UserDetailsService}.
      */
     @Bean
     @ConditionalOnProperty(name = "agent.store", havingValue = "memory")
-    public UserDetailsService userDetailsService(SecurityProperties properties, PasswordEncoder encoder) {
+    public InMemoryUserDetailsManager inMemoryUsers(SecurityProperties properties, PasswordEncoder encoder) {
         var manager = new InMemoryUserDetailsManager();
         for (SecurityProperties.User user : properties.users()) {
             manager.createUser(User.builder()
@@ -58,6 +59,14 @@ public class AppConfig {
                     .build());
         }
         return manager;
+    }
+
+    /** In-memory password changes last until restart — the store is rebuilt from config. */
+    @Bean
+    @ConditionalOnProperty(name = "agent.store", havingValue = "memory")
+    public UserPasswordStore userPasswordStore(InMemoryUserDetailsManager users) {
+        return (username, encodedPassword) ->
+                users.updatePassword(users.loadUserByUsername(username), encodedPassword);
     }
 
     @Bean

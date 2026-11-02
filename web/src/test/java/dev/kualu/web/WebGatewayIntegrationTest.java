@@ -29,6 +29,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "agent.security.users[1].password=password123",
         "agent.security.users[1].roles[0]=USER",
         "agent.security.users[1].roles[1]=ADMIN",
+        "agent.security.users[2].username=carol",
+        "agent.security.users[2].password=password123",
+        "agent.security.users[2].roles[0]=USER",
         "llm.base-url=http://localhost",
         "llm.api-key=test",
         "llm.model=test-model"
@@ -100,7 +103,7 @@ class WebGatewayIntegrationTest {
         String token = login("boss", "password123");
         mockMvc.perform(get("/api/v1/admin/users").header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$", hasSize(2)));
+                .andExpect(jsonPath("$", hasSize(3)));
     }
 
     @Test
@@ -164,6 +167,55 @@ class WebGatewayIntegrationTest {
                         .content("{\"content\":\"\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(content().string(containsString("content")));
+    }
+
+    @Test
+    void changePasswordRequiresAuth() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/change-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"currentPassword\":\"password123\",\"newPassword\":\"new-secret-99\"}"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void changePasswordRejectsWrongCurrentPassword() throws Exception {
+        String token = login("alice", "password123");
+        mockMvc.perform(post("/api/v1/auth/change-password")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"currentPassword\":\"nope\",\"newPassword\":\"new-secret-99\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("current password is incorrect"));
+    }
+
+    @Test
+    void changePasswordRejectsWeakNewPassword() throws Exception {
+        String token = login("alice", "password123");
+        mockMvc.perform(post("/api/v1/auth/change-password")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"currentPassword\":\"password123\",\"newPassword\":\"short\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message", containsString("newPassword")));
+    }
+
+    @Test
+    void changePasswordSwapsCredentials() throws Exception {
+        // carol is reserved for this test so the shared context's other accounts
+        // keep their seeded passwords regardless of method order.
+        String token = login("carol", "password123");
+        mockMvc.perform(post("/api/v1/auth/change-password")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"currentPassword\":\"password123\",\"newPassword\":\"new-secret-99\"}"))
+                .andExpect(status().isNoContent());
+
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"carol\",\"password\":\"password123\"}"))
+                .andExpect(status().isUnauthorized());
+
+        login("carol", "new-secret-99");
     }
 
     private String login(String username, String password) throws Exception {
