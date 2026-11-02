@@ -26,6 +26,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Endpoint-level SSE contract test (S2.5): delta*, then done (or error).
  */
 @SpringBootTest(properties = {
+        "agent.store=memory",
         "agent.security.jwt-secret=test-secret-test-secret-test-secret-1234",
         "agent.security.users[0].username=alice",
         "agent.security.users[0].password=password123",

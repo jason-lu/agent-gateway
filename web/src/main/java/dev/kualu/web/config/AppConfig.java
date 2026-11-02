@@ -10,6 +10,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
@@ -41,7 +42,12 @@ public class AppConfig {
         return PasswordEncoderFactories.createDelegatingPasswordEncoder();
     }
 
+    /**
+     * Config-backed users, used when {@code agent.store=memory}. The postgres profile
+     * authenticates against {@code agent.users} instead (see {@link PostgresConfig}).
+     */
     @Bean
+    @ConditionalOnProperty(name = "agent.store", havingValue = "memory")
     public UserDetailsService userDetailsService(SecurityProperties properties, PasswordEncoder encoder) {
         var manager = new InMemoryUserDetailsManager();
         for (SecurityProperties.User user : properties.users()) {

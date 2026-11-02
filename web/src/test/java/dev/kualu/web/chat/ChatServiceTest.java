@@ -170,6 +170,24 @@ class ChatServiceTest {
         assertEquals(before + 1, llm.replyPayloads.get(0).size());
     }
 
+    @Test
+    void persistFailure_doesNotCostTheUserTheReply() {
+        InMemorySessionStore store = new InMemorySessionStore() {
+            @Override
+            public Session update(Session session) {
+                throw new org.springframework.dao.DataAccessResourceFailureException("database gone");
+            }
+        };
+        Session session = store.create("ada", null);
+        RecordingLlm llm = new RecordingLlm();
+        ChatService service = new ChatService(
+                store, clientProvider(llm), emptyCompressorProvider(), configuredProperties());
+
+        // The reply is already produced; a failed write must not turn it into an error.
+        assertEquals("REPLY", service.chat(session, "new question"));
+        assertEquals(2, session.messageCount());
+    }
+
     @SuppressWarnings("unchecked")
     private static ObjectProvider<LlmClient> emptyProvider() {
         return clientProvider(null);

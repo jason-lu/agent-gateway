@@ -22,7 +22,7 @@ public final class ApiDtos {
     public record HistoryMessage(String role, String content) {
     }
 
-    public record HealthResponse(String status, boolean llmConfigured) {
+    public record HealthResponse(String status, boolean llmConfigured, boolean dbUp) {
     }
 
     public record AdminUserResponse(String username, List<String> roles) {

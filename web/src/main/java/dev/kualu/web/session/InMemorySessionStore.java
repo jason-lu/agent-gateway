@@ -1,6 +1,9 @@
 package dev.kualu.web.session;
 
 import dev.kualu.llm.ConversationMemory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -13,11 +16,20 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Process-local session store. Sessions are lost on restart.
+ * Only registered when {@code agent.store=memory}.
  */
 @Component
+@ConditionalOnProperty(name = "agent.store", havingValue = "memory")
 public class InMemorySessionStore implements SessionStore {
 
+    private static final Logger log = LoggerFactory.getLogger(InMemorySessionStore.class);
+
     private final Map<String, Session> sessions = new ConcurrentHashMap<>();
+
+    public InMemorySessionStore() {
+        log.warn("agent.store=memory: sessions and users are NOT persisted; "
+                + "all history is lost on restart. Do not use this in production.");
+    }
 
     @Override
     public Session create(String owner, String systemPrompt) {

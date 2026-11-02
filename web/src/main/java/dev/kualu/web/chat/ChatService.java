@@ -7,6 +7,8 @@ import dev.kualu.web.api.ApiDtos.HistoryMessage;
 import dev.kualu.web.config.LlmProperties;
 import dev.kualu.web.session.Session;
 import dev.kualu.web.session.SessionStore;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
@@ -18,6 +20,8 @@ import java.util.function.Consumer;
  */
 @Service
 public class ChatService {
+
+    private static final Logger log = LoggerFactory.getLogger(ChatService.class);
 
     private final SessionStore sessionStore;
     private final LlmClient llmClient;
@@ -47,7 +51,7 @@ public class ChatService {
                 compress(session);
                 String reply = llmClient.chat(session.memory().withUser(content));
                 session.memory().addUser(content).addAssistant(reply);
-                sessionStore.update(session);
+                persistQuietly(session);
                 return reply;
             } catch (LlmException ex) {
                 throw new UpstreamLlmException(ex.getMessage(), ex);
@@ -62,7 +66,7 @@ public class ChatService {
                 compress(session);
                 String reply = llmClient.chatStream(session.memory().withUser(content), onDelta);
                 session.memory().addUser(content).addAssistant(reply);
-                sessionStore.update(session);
+                persistQuietly(session);
                 return reply;
             } catch (LlmException ex) {
                 throw new UpstreamLlmException(ex.getMessage(), ex);
@@ -83,6 +87,20 @@ public class ChatService {
     private void compress(Session session) {
         if (compressor != null) {
             compressor.maybeCompress(session.memory(), "session=" + session.id());
+        }
+    }
+
+    /**
+     * Durability must not cost the user an answer that was already produced: if the
+     * write fails the turn stays in process memory and the failure is loud in the logs
+     * (and visible via {@code health.dbUp}), rather than surfaced as an error.
+     */
+    private void persistQuietly(Session session) {
+        try {
+            sessionStore.update(session);
+        } catch (RuntimeException ex) {
+            log.warn("session-persist failed for session={}; the turn is kept in memory but is not durable",
+                    session.id(), ex);
         }
     }
 

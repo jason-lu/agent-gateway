@@ -1,11 +1,17 @@
 ---
 feature: postgres-persistence
-status: draft
+status: delivered
 updated: 2026-02-18
-source: (pending)
+source: main
 ---
 
 # PostgreSQL Persistence
+
+## Report
+
+**What was built** — Users and conversations now persist to PostgreSQL. `agent.users` holds bcrypt credentials and `roles text[]`; `agent.sessions` holds each conversation as one ordered `messages jsonb` array, so a compressed summary resumes exactly where it left off. Flyway owns the schema (`agent` schema, `V1__init.sql`). `JdbcUserDetailsService` authenticates against the database; config-declared users are seeded once (`insert … on conflict do nothing`) and never overwritten afterwards. `PostgresSessionStore` implements the existing `SessionStore` interface with owner-scoped SQL; `InMemorySessionStore` remains for `agent.store=memory`, which touches no database at all. Credentials come only from the environment; the DB URL must use a TLS mode that cannot fall back to plaintext (whitelist, with loopback as the single exception for local/embedded databases). `health` gained an additive `dbUp` field. A failed persist no longer costs the user an already-produced reply.
+
+**Verification** — `./gradlew test` PASS across llm-core, cli, web, including integration tests against a real PostgreSQL via zonky `embedded-postgres` (no Docker required): the real Flyway migrations, owner isolation, restart-equivalent reads, compressed-summary round-trips, insert-if-absent seeding, and an end-to-end HTTP smoke (login → create session → chat → history) over `agent.store=postgres`. Independent review found no blockers; its security finding (a deny-list on `sslmode` let `prefer`/`allow` through) is fixed.
 
 ## [S1] Problem
 
@@ -65,13 +71,13 @@ create index agent_sessions_owner_created_idx
 
 | Web key | Env | 示例 / 默认 |
 |---|---|---|
-| `agent.db.url` | `AGENT_DB_URL` | `jdbc:postgresql://kuanslab.com:5432/postgres?sslmode=require` |
+| `agent.db.url` | `AGENT_DB_URL` | `jdbc:postgresql://db.example.com:5432/postgres?sslmode=require` |
 | `agent.db.username` | `AGENT_DB_USERNAME` | `postgres` |
 | `agent.db.password` | `AGENT_DB_PASSWORD` | **无默认，必须来自环境** |
 | `agent.store` | `AGENT_STORE` | `postgres`（可选 `memory`） |
 
 - **口令绝不进源码、不进 `application.yml`**。只出现在 `.env`（已 gitignore）与环境变量里。`.env.example` 只列键名与占位符。
-- 连接串**必须带 `sslmode=require`**：库在公网 IP 上，口令认证明文过网不可接受。
+- 连接串必须**显式声明 TLS**。白名单 `sslmode=require` / `verify-ca` / `verify-full`；`prefer` / `allow` / `disable` 一律拒绝，因为它们都可能退化成明文口令认证。唯一例外：host 为 loopback（`localhost` / `127.0.0.1` / `::1`）时允许 `disable`——明文出不了机器，本地/嵌入式库靠这条才可用。
 - 驱动走 Spring Boot 的 `DataSource` + HikariCP（`spring-boot-starter-jdbc` 引入），不做自建连接池。
 - **待确认（实现首日核对）**：用户给了 host/port/user/口令，**未给库名**。默认先用 `postgres` 库 + `agent` schema；若希望独占一个 `agent` database（更干净、备份/限权更好做），用有 `CREATEDB` 权限的账号建库后改 `AGENT_DB_URL` 即可，代码不感知库名。
 
@@ -117,7 +123,7 @@ public interface SessionStore {
 |---|---|
 | `create` | `insert into agent.sessions (id, owner, messages) values (?, ?, '[]'::jsonb)`；system 提示作为首条消息写入 `messages` |
 | `find` | `select ... where id = ? and owner = ?`；反序列化 `messages` → `ConversationMemory` |
-| `listByOwner` | `select id, created_at, jsonb_array_length(messages) as n ... where owner = ? order by created_at desc`；**不取整包**，列表接口只要元数据 + 条数 |
+| `listByOwner` | `select ... where owner = ? order by created_at desc`。**注意**：本版取整包而非 `jsonb_array_length`——`SessionStore` 返回 `List<Session>` 而 `Session` 持有完整 `ConversationMemory`，两者不可兼得（见 Journey log） |
 | `delete` | `delete where id = ? and owner = ?` |
 | `update` | `update agent.sessions set messages = ? where id = ? and owner = ?`，单语句原子 |
 
@@ -212,21 +218,27 @@ org.flywaydb:flyway-database-postgresql
 
 ## Tasks
 
-- [ ] T1: Flyway 迁移 `V1__init.sql` + 连接配置（`agent.db.*`，口令仅来自环境）— acceptance: `store=postgres` 且无口令时启动失败；迁移在 Testcontainers 上跑通 (covers: S2.1, S2.2, S2.8)
-- [ ] T2: `JdbcUserDetailsService` + 启动期种子（insert-if-absent）— acceptance: 登录走库；已存在用户不被覆盖；单测覆盖 (covers: S2.3)
-- [ ] T3: `ChatMessage` ↔ JSON 无损序列化 — acceptance: system / tool / 压缩摘要三形态往返无损，`toolCallId` 保住 (covers: S2.1)
-- [ ] T4: `PostgresSessionStore`（create/find/listByOwner/delete/update）— acceptance: 单测覆盖 SQL 与 owner 过滤；`listByOwner` 不取整包 (covers: S2.4)
-- [ ] T5: `agent.store` 切换与 `memory` 模式 WARN — acceptance: 两种模式 HTTP 契约一致；`memory` 启动期有明确警告 (covers: S2.5)
-- [ ] T6: 失败语义 + health 扩展（`dbUp`）— acceptance: 写失败仍返回回复且打 WARN；启动期连不上库硬失败；health 只增字段 (covers: S2.6, S2.7)
-- [ ] T7: Testcontainers 集成测试（含重启等价性、owner 隔离、摘要落库）— acceptance: 无 Docker 时优雅跳过；有则全绿 (covers: S2.9)
-- [ ] T8: README / `.env.example` 更新（连接配置、schema、行为差异）— acceptance: 文档与真实配置键一致；`.env.example` 不含真实口令 (depends: T1–T6)
-- [ ] T9: `./gradlew test` 全绿 + 独立复审 — acceptance: 无回归，S2.9 全覆盖 (depends: T1–T8)
+- [x] T1: Flyway 迁移 `V1__init.sql` + 连接配置（`agent.db.*`，口令仅来自环境）— acceptance: `store=postgres` 且无口令时启动失败；迁移在真实 PostgreSQL 上跑通 (covers: S2.1, S2.2, S2.8)
+- [x] T2: `JdbcUserDetailsService` + 启动期种子（insert-if-absent）— acceptance: 登录走库；已存在用户不被覆盖；单测覆盖 (covers: S2.3)
+- [x] T3: `ChatMessage` ↔ JSON 无损序列化 — acceptance: system / tool / 压缩摘要三形态往返无损，`toolCallId` 保住 (covers: S2.1)
+- [x] T4: `PostgresSessionStore`（create/find/listByOwner/delete/update）— acceptance: 单测覆盖 SQL 与 owner 过滤 (covers: S2.4)
+- [x] T5: `agent.store` 切换与 `memory` 模式 WARN — acceptance: 两种模式 HTTP 契约一致；`memory` 启动期有明确警告 (covers: S2.5)
+- [x] T6: 失败语义 + health 扩展（`dbUp`）— acceptance: 写失败仍返回回复且打 WARN；启动期连不上库硬失败；health 只增字段 (covers: S2.6, S2.7)
+- [x] T7: 真实 PostgreSQL 集成测试（重启等价性、owner 隔离、摘要落库、HTTP 冒烟）— acceptance: 全绿 (covers: S2.9)
+- [x] T8: README / `.env.example` 更新（连接配置、schema、行为差异）— acceptance: 文档与真实配置键一致；`.env.example` 不含真实口令 (depends: T1–T6)
+- [x] T9: `./gradlew test` 全绿 + 独立复审 — acceptance: 无回归，S2.9 全覆盖 (depends: T1–T8)
 
-## 待确认
+## 已决事项（原「待确认」）
 
-- **数据库名**：用户只给了 host/port/user/口令。默认 `postgres` 库 + `agent` schema；若要独占 `agent` database，需确认账号有 `CREATEDB` 权限。实现首日核对。
-- **口令轮换**：该口令已出现在对话里，接入前应换新。新口令只进 `.env`。
+- **数据库名**：用户只给了 host/port/user/口令。代码不感知库名，`AGENT_DB_URL` 里定；本版按 `postgres` 库 + `agent` schema 落地，要独占 `agent` database 时改连接串即可。
+- **口令轮换**：该口令已出现在对话里，接入前应换新。新口令只进 `.env`。**仓库内已扫描确认无真实口令/主机**。
 
 ## Journey log
 
-（待实现后补充）
+- **Testcontainers → zonky embedded-postgres**：本机无 Docker（`docker` 命令不存在），按 spec T7 预留的退路本该跳过集成测试。但那等于迁移 DDL 与 store 真实往返**从未被验证**，风险太高。改用 `io.zonky.test:embedded-postgres`——它下载真 PostgreSQL 二进制在本地起库，不需要 Docker，**在 Windows 上验证可用**。结果是集成测试真的跑了 Flyway、真做了 CRU、真验了 owner 隔离与重启等价。代价是首次跑要下约 30MB 二进制。
+- **spec S2.4 自相矛盾**：一边写「接口零改动」，一边要求「`listByOwner` 不取整包」。`SessionStore.listByOwner` 返回 `List<Session>`，而 `Session` 持有完整 `ConversationMemory`、`messageCount()` 从它派生——要在不改接口的前提下给出准确条数是不可能的。落地时选了**冻结接口**，`listByOwner` 取整包。好消息是压缩特性已经把每会话历史压到 `2 + keepMessages` 量级，这个优化本就为时过早。真要拆，需要引入 `SessionSummary` DTO 或计数列，是后续工作不是查询改动。
+- **`sslmode` 必须白名单，不能黑名单**：复审发现我原先只拒 `disable`，但 `prefer` / `allow` 同样会退化成明文口令认证，正好违背 S2.2「口令认证明文过网不可接受」。改成白名单 `require` / `verify-ca` / `verify-full`。**额外开一个原则性例外**：host 为 loopback 时允许 `disable`——明文出不了机器，否则本地/嵌入式库根本没法用。这是让冒烟测试能跑通的关键。
+- **默认口令会播进公开库**：`application.yml` 的 `AGENT_ADMIN_PASSWORD:change-me` 是既有默认，但以前只进内存，现在会被 bcrypt 编码后**种进公网 PostgreSQL**。删默认会破坏快速上手，折中方案是种子时检测到占位口令就打 `WARN` 点名账号，并在 README 写明必须改。**残余风险**：只警告不阻断，靠运维看到日志。若要更硬，改成 `store=postgres` 时口令必填即可。
+- **启动期连库校验是间接的**：Hikari 设了 `initializationFailTimeout(0)`（否则构造就连库，单测没法跑），所以「库连不上」这条硬失败由 **Flyway** 兜着。今天够用，但若哪天 Flyway 被关掉就没有这道闸了。S2.6 要求错误信息指向连接串与 `sslmode`，Flyway 的报错不保证满足——这条留作已知不足。
+- **`V1__init.sql` 不写 `create schema`**：靠 `spring.flyway.create-schemas: true` 建 `agent` schema。为自包含起见最后还是把 `create schema if not exists agent;` 加回迁移文件，两处幂等不冲突。
+- **外键真的会咬人**：集成测试第一版直接建会话就撞 `sessions_owner_fkey`——`owner` 必须先在 `users` 里。这证明 FK 是活的，也说明**先种子、后建会话**是硬顺序。

@@ -20,6 +20,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest(properties = {
+        "agent.store=memory",
         "agent.security.jwt-secret=test-secret-test-secret-test-secret-1234",
         "agent.security.users[0].username=alice",
         "agent.security.users[0].password=password123",
@@ -43,7 +44,8 @@ class WebGatewayIntegrationTest {
         mockMvc.perform(get("/api/v1/health"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("UP"))
-                .andExpect(jsonPath("$.llmConfigured").value(true));
+                .andExpect(jsonPath("$.llmConfigured").value(true))
+                .andExpect(jsonPath("$.dbUp").value(true));
     }
 
     @Test

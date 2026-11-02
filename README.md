@@ -35,7 +35,11 @@ Credentials are read from **environment variables first**, then from a `.env` fi
 | Model | `LLM_MODEL` | `MODEL` | `llm.model` |
 | JWT secret | `AGENT_JWT_SECRET` | — | `agent.security.jwt-secret` (min 32 chars, required to start web) |
 | JWT TTL | `AGENT_JWT_TTL` | — | `agent.security.jwt-ttl` (default `2h`) |
-| Admin user | `AGENT_ADMIN_USERNAME` / `AGENT_ADMIN_PASSWORD` | — | `agent.security.users` |
+| Admin user | `AGENT_ADMIN_USERNAME` / `AGENT_ADMIN_PASSWORD` | — | `agent.security.users` (first-start seed only) |
+| Persistence backend | `AGENT_STORE` | — | `agent.store` (default `postgres`, or `memory`) |
+| Database URL | `AGENT_DB_URL` | — | `agent.db.url` (must set `sslmode`) |
+| Database user | `AGENT_DB_USERNAME` | — | `agent.db.username` (default `postgres`) |
+| Database password | `AGENT_DB_PASSWORD` | — | `agent.db.password` (**no default, never in source**) |
 | Memory compression | `AGENT_MEMORY_ENABLED` | — | `agent.memory.enabled` (default `true`) |
 | Compression threshold | `AGENT_MEMORY_MAX_MESSAGES` | — | `agent.memory.max-messages` (default `20`) |
 | Turns kept verbatim | `AGENT_MEMORY_KEEP_MESSAGES` | — | `agent.memory.keep-messages` (default `8`) |
@@ -166,7 +170,29 @@ Error body: `{ "status", "error", "message" }`.
 Chat is `503` when LLM is not configured, `502` when the upstream LLM fails.
 
 Sessions are isolated per authenticated user (404 if not found or not yours).
-Storage is a pluggable `SessionStore`; the default `InMemorySessionStore` keeps history in memory only.
+Sessions and accounts are persisted to PostgreSQL by default and survive restarts; see [Persistence](#persistence).
+
+### Persistence
+
+By default (`agent.store=postgres`) users and conversations live in PostgreSQL:
+
+| Table | Holds |
+|---|---|
+| `agent.users` | `username`, bcrypt `password_hash`, `roles text[]` |
+| `agent.sessions` | `id`, `owner` (FK to users), `created_at`, `messages jsonb` |
+
+- **Schema** is managed by Flyway (`web/src/main/resources/db/migration`), applied at startup in the `agent` schema. Never edit a shipped migration — add `V2__*.sql` instead.
+- **Users** are seeded from `agent.security.users` on first start only (`insert … on conflict do nothing`). After that the database is the source of truth: a password or role changed by hand is never overwritten, and removing a user from config does not delete the account. Changing a password or adding a user is SQL for now — there is no admin API yet.
+- **The whole conversation** (including any [compression summary](#memory-compression)) is stored as one ordered JSON array per session, so a restart resumes exactly where it left off.
+- **Credentials never live in source.** Put `AGENT_DB_PASSWORD` in `.env` (gitignored) or the environment. The URL must state its TLS intent (`sslmode=require`) because the password would otherwise cross the network in plaintext.
+- **`agent.store=memory`** reverts to process-local storage: no database is contacted at all, and the app warns loudly at startup. Intended for local experiments and tests only.
+
+The health endpoint reports database reachability without needing authentication:
+
+```bash
+curl -s http://127.0.0.1:8080/api/v1/health
+# { "status": "UP", "llmConfigured": true, "dbUp": true }
+```
 
 Example:
 
@@ -312,3 +338,8 @@ module your.app {
 ```
 
 Covers HTTP client, LLM config/`chat`/`chatStream` (including multi-turn message lists, SSE, and error paths), conversation memory, memory compression (layout, incremental summary, cut-point safety, failure handling), console commands, session store isolation, JWT login/security, and REST session/message APIs.
+
+Persistence is covered by integration tests that run a real PostgreSQL via
+[io.zonky.test:embedded-postgres](https://github.com/zonkyio/embedded-postgres) — no Docker required.
+They apply the real Flyway migrations and verify owner isolation, restart-equivalent reads,
+compressed-summary round-trips, and that a seeded account is never overwritten.

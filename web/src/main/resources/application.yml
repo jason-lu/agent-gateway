@@ -4,6 +4,17 @@ server:
 spring:
   application:
     name: agent-web
+  # The DataSource is defined by PostgresConfig (only when agent.store=postgres).
+  # Excluding auto-configuration keeps agent.store=memory from ever touching a database.
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+  flyway:
+    enabled: true
+    schemas: agent
+    create-schemas: true
+    default-schema: agent
+    locations: classpath:db/migration
 
 llm:
   base-url: ${LLM_BASE_URL:${BASE_URL:}}
@@ -11,6 +22,11 @@ llm:
   model: ${LLM_MODEL:${MODEL:}}
 
 agent:
+  store: ${AGENT_STORE:postgres}
+  db:
+    url: ${AGENT_DB_URL:}
+    username: ${AGENT_DB_USERNAME:postgres}
+    password: ${AGENT_DB_PASSWORD:}
   memory:
     enabled: ${AGENT_MEMORY_ENABLED:true}
     max-messages: ${AGENT_MEMORY_MAX_MESSAGES:20}
