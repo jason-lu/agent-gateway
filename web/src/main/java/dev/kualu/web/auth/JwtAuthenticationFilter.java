@@ -24,6 +24,16 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         this.jwtService = jwtService;
     }
 
+    /**
+     * SseEmitter completes the request through an async dispatch, which re-enters the
+     * security chain without a SecurityContext. Re-running the JWT filter there keeps
+     * the async completion authenticated instead of failing with Access Denied.
+     */
+    @Override
+    protected boolean shouldNotFilterAsyncDispatch() {
+        return false;
+    }
+
     @Override
     protected void doFilterInternal(
             HttpServletRequest request,
