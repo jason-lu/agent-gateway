@@ -19,9 +19,11 @@ import java.util.Optional;
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtService jwtService;
+    private final RefreshTokenService refreshTokenService;
 
-    public JwtAuthenticationFilter(JwtService jwtService) {
+    public JwtAuthenticationFilter(JwtService jwtService, RefreshTokenService refreshTokenService) {
         this.jwtService = jwtService;
+        this.refreshTokenService = refreshTokenService;
     }
 
     /**
@@ -44,6 +46,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             String token = header.substring(7).trim();
             jwtService.parse(token).ifPresent(claims -> {
                 if (SecurityContextHolder.getContext().getAuthentication() == null) {
+                    // The sid claim ties the access token to a refresh session: a revoked
+                    // or idle-expired session rejects the request even if the JWT itself
+                    // has not reached its exp. Accepting the request marks it active.
+                    if (!refreshTokenService.accept(claims.get("sid", String.class))) {
+                        return;
+                    }
                     String username = claims.getSubject();
                     @SuppressWarnings("unchecked")
                     List<String> roles = claims.get("roles", List.class);

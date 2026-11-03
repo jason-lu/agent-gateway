@@ -34,7 +34,8 @@ Credentials are read from **environment variables first**, then from a `.env` fi
 | API key | `LLM_API_KEY` | `API_KEY` | `llm.api-key` |
 | Model | `LLM_MODEL` | `MODEL` | `llm.model` |
 | JWT secret | `AGENT_JWT_SECRET` | — | `agent.security.jwt-secret` (min 32 chars, required to start web) |
-| JWT TTL | `AGENT_JWT_TTL` | — | `agent.security.jwt-ttl` (default `2h`) |
+| JWT TTL | `AGENT_JWT_TTL` | — | `agent.security.jwt-ttl` (default `2h`, access-token lifetime) |
+| Idle timeout | `AGENT_REFRESH_IDLE_TIMEOUT` | — | `agent.security.refresh-idle-timeout` (default `24h`) |
 | Admin user | `AGENT_ADMIN_USERNAME` / `AGENT_ADMIN_PASSWORD` | — | `agent.security.users` (first-start seed only) |
 | Persistence backend | `AGENT_STORE` | — | `agent.store` (default `postgres`, or `memory`) |
 | Database URL | `AGENT_DB_URL` | — | `agent.db.url` (must set `sslmode`) |
@@ -143,8 +144,10 @@ curl -s http://127.0.0.1:8080/api/v1/auth/login \
 Response:
 
 ```json
-{ "token": "<jwt>", "tokenType": "Bearer", "expiresIn": 7200 }
+{ "token": "<jwt>", "tokenType": "Bearer", "expiresIn": 7200, "refreshToken": "<opaque>" }
 ```
+
+Sessions are server-side (one row per login in `agent.refresh_tokens`). The access JWT is bound to its session via a `sid` claim and expires after `AGENT_JWT_TTL`; the session itself only expires after `AGENT_REFRESH_IDLE_TIMEOUT` (default `24h`) without any authenticated request — refreshing the pair counts as activity, `logout` revokes immediately.
 
 Users and roles are configured under `agent.security.users` (see `web/src/main/resources/application.yml`).
 Roles: `USER` (sessions/chat), `ADMIN` (adds `GET /api/v1/admin/users`).
@@ -158,14 +161,16 @@ curl -s -X POST http://127.0.0.1:8080/api/v1/auth/change-password \
   -d '{"currentPassword":"old-password","newPassword":"at-least-8-chars"}'
 ```
 
-New passwords need at least 8 characters; a wrong `currentPassword` is `400`. Already-issued JWTs are stateless and stay valid until expiry — only future logins use the new password. With `agent.store=memory` the change lasts until restart; with `agent.store=postgres` it is written to `agent.users` and survives restarts.
+New passwords need at least 8 characters; a wrong `currentPassword` is `400`. The current session keeps working until it goes idle (`agent.security.refresh-idle-timeout`) or is revoked with `POST /api/v1/auth/logout` — only future logins use the new password. With `agent.store=memory` the change lasts until restart; with `agent.store=postgres` it is written to `agent.users` and survives restarts.
 
 ### API
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | GET | `/api/v1/health` | public | `{status, llmConfigured}` |
-| POST | `/api/v1/auth/login` | public | Issue JWT |
+| POST | `/api/v1/auth/login` | public | Issue access + refresh token pair |
+| POST | `/api/v1/auth/refresh` | public | `{refreshToken}` → rotated pair (401 when idle/unknown) |
+| POST | `/api/v1/auth/logout` | public | `{refreshToken}` → `204`, revokes the session |
 | POST | `/api/v1/auth/change-password` | USER | `{currentPassword, newPassword}` → `204` |
 | GET | `/api/v1/sessions` | USER | List your sessions |
 | POST | `/api/v1/sessions` | USER | Create session `{systemPrompt?}` |

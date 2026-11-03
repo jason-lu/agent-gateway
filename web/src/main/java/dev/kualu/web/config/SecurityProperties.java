@@ -10,10 +10,12 @@ import java.util.List;
 public record SecurityProperties(
         String jwtSecret,
         Duration jwtTtl,
+        Duration refreshIdleTimeout,
         List<User> users
 ) {
 
     public SecurityProperties {
+        refreshIdleTimeout = refreshIdleTimeout == null ? Duration.ofHours(24) : refreshIdleTimeout;
         users = users == null ? new ArrayList<>() : List.copyOf(users);
     }
 

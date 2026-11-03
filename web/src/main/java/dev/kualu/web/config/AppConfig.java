@@ -5,6 +5,7 @@ import dev.kualu.llm.LlmClient;
 import dev.kualu.llm.LlmConfig;
 import dev.kualu.llm.MemoryCompressor;
 import dev.kualu.web.api.ApiDtos.ErrorResponse;
+import dev.kualu.web.auth.InMemoryRefreshTokenStore;
 import dev.kualu.web.auth.JwtAuthenticationFilter;
 import dev.kualu.web.auth.UserPasswordStore;
 import jakarta.servlet.http.HttpServletRequest;
@@ -71,6 +72,12 @@ public class AppConfig {
     }
 
     @Bean
+    @ConditionalOnProperty(name = "agent.store", havingValue = "memory")
+    public InMemoryRefreshTokenStore inMemoryRefreshTokenStore() {
+        return new InMemoryRefreshTokenStore();
+    }
+
+    @Bean
     public AuthenticationManager authenticationManager(AuthenticationConfiguration configuration) throws Exception {
         return configuration.getAuthenticationManager();
     }
@@ -88,7 +95,12 @@ public class AppConfig {
                                 writeError(response, objectMapper, HttpStatus.UNAUTHORIZED, "unauthorized"))
                         .accessDeniedHandler(accessDeniedHandler(objectMapper)))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/api/v1/auth/login", "/api/v1/health").permitAll()
+                        .requestMatchers(
+                                "/api/v1/auth/login",
+                                "/api/v1/auth/refresh",
+                                "/api/v1/auth/logout",
+                                "/api/v1/health")
+                        .permitAll()
                         .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                         .requestMatchers("/api/v1/**").hasRole("USER")
                         .anyRequest().permitAll())

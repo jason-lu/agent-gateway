@@ -33,12 +33,13 @@ public class JwtService {
         this.key = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
     }
 
-    public String issueToken(String username, List<String> roles) {
+    public String issueToken(String username, List<String> roles, String sessionId) {
         Instant now = Instant.now();
         Instant expiry = now.plus(properties.jwtTtl());
         return Jwts.builder()
                 .subject(username)
                 .claim("roles", roles)
+                .claim("sid", sessionId)
                 .issuedAt(Date.from(now))
                 .expiration(Date.from(expiry))
                 .signWith(key, Jwts.SIG.HS256)

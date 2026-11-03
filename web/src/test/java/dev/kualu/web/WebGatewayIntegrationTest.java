@@ -8,6 +8,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.not;
@@ -59,7 +60,53 @@ class WebGatewayIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.tokenType").value("Bearer"))
                 .andExpect(jsonPath("$.token", not(blankOrNullString())))
+                .andExpect(jsonPath("$.refreshToken", not(blankOrNullString())))
                 .andExpect(jsonPath("$.expiresIn").value(7200));
+    }
+
+    @Test
+    void refreshExchangesAndRotatesTheRefreshToken() throws Exception {
+        String loginBody = loginBody("alice", "password123");
+        String refreshToken = com.jayway.jsonpath.JsonPath.read(loginBody, "$.refreshToken");
+
+        MvcResult refreshed = mockMvc.perform(post("/api/v1/auth/refresh")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"refreshToken\":\"" + refreshToken + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.token", not(blankOrNullString())))
+                .andExpect(jsonPath("$.refreshToken", not(blankOrNullString())))
+                .andReturn();
+        String rotated = com.jayway.jsonpath.JsonPath.read(
+                refreshed.getResponse().getContentAsString(), "$.refreshToken");
+        assertThat(rotated).isNotEqualTo(refreshToken);
+
+        // The pre-rotation value is dead after the exchange.
+        mockMvc.perform(post("/api/v1/auth/refresh")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"refreshToken\":\"" + refreshToken + "\"}"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void logoutRevokesTheSessionForTheAccessTokenToo() throws Exception {
+        String loginBody = loginBody("alice", "password123");
+        String token = com.jayway.jsonpath.JsonPath.read(loginBody, "$.token");
+        String refreshToken = com.jayway.jsonpath.JsonPath.read(loginBody, "$.refreshToken");
+
+        mockMvc.perform(get("/api/v1/sessions").header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/v1/auth/logout")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"refreshToken\":\"" + refreshToken + "\"}"))
+                .andExpect(status().isNoContent());
+
+        mockMvc.perform(get("/api/v1/sessions").header("Authorization", "Bearer " + token))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(post("/api/v1/auth/refresh")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"refreshToken\":\"" + refreshToken + "\"}"))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
@@ -219,11 +266,15 @@ class WebGatewayIntegrationTest {
     }
 
     private String login(String username, String password) throws Exception {
+        return com.jayway.jsonpath.JsonPath.read(loginBody(username, password), "$.token");
+    }
+
+    private String loginBody(String username, String password) throws Exception {
         MvcResult result = mockMvc.perform(post("/api/v1/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"username\":\"" + username + "\",\"password\":\"" + password + "\"}"))
                 .andExpect(status().isOk())
                 .andReturn();
-        return com.jayway.jsonpath.JsonPath.read(result.getResponse().getContentAsString(), "$.token");
+        return result.getResponse().getContentAsString();
     }
 }

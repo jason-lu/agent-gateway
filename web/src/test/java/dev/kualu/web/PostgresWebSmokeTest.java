@@ -117,6 +117,35 @@ class PostgresWebSmokeTest {
     }
 
     @Test
+    void refreshTokens_rotateInTheDatabase() throws Exception {
+        String loginBody = mockMvc.perform(post("/api/v1/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"alice\",\"password\":\"password123\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.refreshToken").isNotEmpty())
+                .andReturn().getResponse().getContentAsString();
+        String refreshToken = com.jayway.jsonpath.JsonPath.read(loginBody, "$.refreshToken");
+
+        String refreshed = mockMvc.perform(post("/api/v1/auth/refresh")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"refreshToken\":\"" + refreshToken + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.refreshToken").isNotEmpty())
+                .andReturn().getResponse().getContentAsString();
+        String rotated = com.jayway.jsonpath.JsonPath.read(refreshed, "$.refreshToken");
+
+        // Rotation is persisted: the old hash is gone from agent.refresh_tokens.
+        mockMvc.perform(post("/api/v1/auth/refresh")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"refreshToken\":\"" + refreshToken + "\"}"))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(post("/api/v1/auth/refresh")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"refreshToken\":\"" + rotated + "\"}"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
     void unknownCredentials_areRejected() throws Exception {
         mockMvc.perform(post("/api/v1/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)

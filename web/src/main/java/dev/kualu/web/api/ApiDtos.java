@@ -7,7 +7,7 @@ public final class ApiDtos {
     private ApiDtos() {
     }
 
-    public record LoginResponse(String token, String tokenType, long expiresIn) {
+    public record LoginResponse(String token, String tokenType, long expiresIn, String refreshToken) {
     }
 
     public record CreateSessionRequest(String systemPrompt) {

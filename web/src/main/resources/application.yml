@@ -37,6 +37,9 @@ agent:
   security:
     jwt-secret: ${AGENT_JWT_SECRET:}
     jwt-ttl: ${AGENT_JWT_TTL:2h}
+    # A session dies after this long without any authenticated request (idle),
+    # regardless of the access-token expiry. Refreshing counts as activity.
+    refresh-idle-timeout: ${AGENT_REFRESH_IDLE_TIMEOUT:24h}
     users:
       - username: ${AGENT_ADMIN_USERNAME:admin}
         password: ${AGENT_ADMIN_PASSWORD:change-me}

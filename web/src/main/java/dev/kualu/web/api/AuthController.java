@@ -1,7 +1,7 @@
 package dev.kualu.web.api;
 
 import dev.kualu.web.api.ApiDtos.LoginResponse;
-import dev.kualu.web.auth.JwtService;
+import dev.kualu.web.auth.RefreshTokenService;
 import dev.kualu.web.auth.UserPasswordStore;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -29,21 +29,21 @@ public class AuthController {
 
     private final AuthenticationManager authenticationManager;
     private final UserDetailsService userDetailsService;
-    private final JwtService jwtService;
     private final PasswordEncoder passwordEncoder;
     private final UserPasswordStore passwordStore;
+    private final RefreshTokenService refreshTokenService;
 
     public AuthController(
             AuthenticationManager authenticationManager,
             UserDetailsService userDetailsService,
-            JwtService jwtService,
             PasswordEncoder passwordEncoder,
-            UserPasswordStore passwordStore) {
+            UserPasswordStore passwordStore,
+            RefreshTokenService refreshTokenService) {
         this.authenticationManager = authenticationManager;
         this.userDetailsService = userDetailsService;
-        this.jwtService = jwtService;
         this.passwordEncoder = passwordEncoder;
         this.passwordStore = passwordStore;
+        this.refreshTokenService = refreshTokenService;
     }
 
     @PostMapping("/login")
@@ -54,17 +54,32 @@ public class AuthController {
         } catch (AuthenticationException ex) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "invalid credentials");
         }
-        UserDetails user = userDetailsService.loadUserByUsername(body.username());
-        List<String> roles = user.getAuthorities().stream()
-                .map(authority -> authority.getAuthority().replaceFirst("^ROLE_", ""))
-                .toList();
-        String token = jwtService.issueToken(user.getUsername(), roles);
-        return new LoginResponse(token, "Bearer", jwtService.expiresInSeconds());
+        return issue(userDetailsService.loadUserByUsername(body.username()));
     }
 
     /**
-     * Replaces the caller's own password. Issued JWTs are stateless and stay valid
-     * until expiry — only future logins use the new password.
+     * Exchanges a refresh token for a new access/refresh pair (rotation). The
+     * session expires only after {@code agent.security.refresh-idle-timeout}
+     * without activity; this call itself counts as activity.
+     */
+    @PostMapping("/refresh")
+    public LoginResponse refresh(@Valid @RequestBody RefreshRequest body) {
+        return refreshTokenService.refresh(body.refreshToken())
+                .map(this::toResponse)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "invalid refresh token"));
+    }
+
+    /** Revokes the session behind the refresh token. Idempotent; 204 either way. */
+    @PostMapping("/logout")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void logout(@Valid @RequestBody LogoutRequest body) {
+        refreshTokenService.logout(body.refreshToken());
+    }
+
+    /**
+     * Replaces the caller's own password. The current session keeps working
+     * until it goes idle or is revoked with /auth/logout; only future logins
+     * use the new password.
      */
     @PostMapping("/change-password")
     @ResponseStatus(HttpStatus.NO_CONTENT)
@@ -77,9 +92,29 @@ public class AuthController {
         passwordStore.updatePassword(username, passwordEncoder.encode(body.newPassword()));
     }
 
+    private LoginResponse issue(UserDetails user) {
+        List<String> roles = user.getAuthorities().stream()
+                .map(authority -> authority.getAuthority().replaceFirst("^ROLE_", ""))
+                .toList();
+        return toResponse(refreshTokenService.issue(user.getUsername(), roles));
+    }
+
+    private LoginResponse toResponse(RefreshTokenService.Issued issued) {
+        return new LoginResponse(
+                issued.accessToken(), "Bearer", issued.expiresInSeconds(), issued.refreshToken());
+    }
+
     public record LoginBody(
             @NotBlank String username,
             @NotBlank String password) {
+    }
+
+    public record RefreshRequest(
+            @NotBlank String refreshToken) {
+    }
+
+    public record LogoutRequest(
+            @NotBlank String refreshToken) {
     }
 
     public record ChangePasswordBody(
