@@ -80,7 +80,7 @@ class ChatServiceTest {
         InMemorySessionStore store = new InMemorySessionStore();
         Session session = store.create("ada", null);
         ChatService service = new ChatService(
-                store, emptyProvider(), emptyCompressorProvider(), new LlmProperties(null, null, null));
+                store, emptyProvider(), emptyCompressorProvider(), new LlmProperties(null, null, null, 90));
 
         assertThrows(LlmNotConfiguredException.class, () -> service.chat(session, "hi"));
         assertEquals(0, session.messageCount());
@@ -94,7 +94,7 @@ class ChatServiceTest {
                 new InMemorySessionStore(),
                 clientProvider(new LlmClient(new LlmConfig("http://x", "k", "m"))),
                 emptyCompressorProvider(),
-                new LlmProperties(null, null, null));
+                new LlmProperties(null, null, null, 90));
 
         assertFalse(missingClient.isLlmConfigured());
         assertFalse(missingProps.isLlmConfigured());
@@ -213,6 +213,6 @@ class ChatServiceTest {
     }
 
     private static LlmProperties configuredProperties() {
-        return new LlmProperties("http://localhost", "key", "model");
+        return new LlmProperties("http://localhost", "key", "model", 90);
     }
 }

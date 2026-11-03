@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -83,6 +84,56 @@ class LlmConfigTest {
 
         LlmException ex = assertThrows(LlmException.class, () -> LlmConfig.fromEnvironment(env));
         assertTrue(ex.getMessage().contains("LLM_BASE_URL"));
+    }
+
+    @Test
+    void fromEnvironment_idleTimeout_defaultsWhenAbsent() throws IOException {
+        Path env = tempDir.resolve(".env");
+        Files.writeString(env, """
+                LLM_BASE_URL=https://llm.test/v1
+                LLM_API_KEY=key
+                LLM_MODEL=model
+                """, StandardCharsets.UTF_8);
+
+        LlmConfig config = LlmConfig.fromEnvironment(env);
+
+        assertEquals(LlmConfig.DEFAULT_IDLE_TIMEOUT, config.idleTimeout());
+    }
+
+    @Test
+    void fromEnvironment_idleTimeout_readsSecondsAndDisablesWithZero() throws IOException {
+        Path env = tempDir.resolve(".env");
+        Files.writeString(env, """
+                LLM_BASE_URL=https://llm.test/v1
+                LLM_API_KEY=key
+                LLM_MODEL=model
+                LLM_IDLE_TIMEOUT=45
+                """, StandardCharsets.UTF_8);
+
+        assertEquals(Duration.ofSeconds(45), LlmConfig.fromEnvironment(env).idleTimeout());
+
+        Files.writeString(env, """
+                LLM_BASE_URL=https://llm.test/v1
+                LLM_API_KEY=key
+                LLM_MODEL=model
+                LLM_IDLE_TIMEOUT=0
+                """, StandardCharsets.UTF_8);
+
+        assertEquals(Duration.ZERO, LlmConfig.fromEnvironment(env).idleTimeout());
+    }
+
+    @Test
+    void fromEnvironment_invalidIdleTimeout_throws() throws IOException {
+        Path env = tempDir.resolve(".env");
+        Files.writeString(env, """
+                LLM_BASE_URL=https://llm.test/v1
+                LLM_API_KEY=key
+                LLM_MODEL=model
+                LLM_IDLE_TIMEOUT=soon
+                """, StandardCharsets.UTF_8);
+
+        LlmException ex = assertThrows(LlmException.class, () -> LlmConfig.fromEnvironment(env));
+        assertTrue(ex.getMessage().contains("LLM_IDLE_TIMEOUT"));
     }
 
     @Test

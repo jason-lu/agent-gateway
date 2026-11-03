@@ -4,24 +4,34 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 
 /**
- * LLM connection settings: base URL, API key, and model name.
+ * LLM connection settings: base URL, API key, model name, and the stream idle timeout.
  * Values are resolved from the process environment first, then from a {@code .env} file.
  */
 public final class LlmConfig {
 
+    /** Idle timeout applied when none is configured. */
+    public static final Duration DEFAULT_IDLE_TIMEOUT = Duration.ofSeconds(90);
+
     private final String baseUrl;
     private final String apiKey;
     private final String model;
+    private final Duration idleTimeout;
 
     public LlmConfig(String baseUrl, String apiKey, String model) {
+        this(baseUrl, apiKey, model, DEFAULT_IDLE_TIMEOUT);
+    }
+
+    public LlmConfig(String baseUrl, String apiKey, String model, Duration idleTimeout) {
         this.baseUrl = requireText(baseUrl, "baseUrl");
         this.apiKey = requireText(apiKey, "apiKey");
         this.model = requireText(model, "model");
+        this.idleTimeout = Objects.requireNonNull(idleTimeout, "idleTimeout");
     }
 
     public String baseUrl() {
@@ -34,6 +44,14 @@ public final class LlmConfig {
 
     public String model() {
         return model;
+    }
+
+    /**
+     * How long a stream may stay silent before it is aborted.
+     * {@link Duration#ZERO} disables the idle watchdog.
+     */
+    public Duration idleTimeout() {
+        return idleTimeout;
     }
 
     /** Loads config from environment variables and {@code .env} in the working directory. */
@@ -50,7 +68,26 @@ public final class LlmConfig {
         return new LlmConfig(
                 resolve("LLM_BASE_URL", "BASE_URL", dotenv),
                 resolve("LLM_API_KEY", "API_KEY", dotenv),
-                resolve("LLM_MODEL", "MODEL", dotenv));
+                resolve("LLM_MODEL", "MODEL", dotenv),
+                resolveIdleTimeout(dotenv));
+    }
+
+    private static Duration resolveIdleTimeout(Map<String, String> dotenv) {
+        String value = firstNonBlank(
+                System.getenv("LLM_IDLE_TIMEOUT"),
+                System.getenv("IDLE_TIMEOUT"),
+                dotenv.get("LLM_IDLE_TIMEOUT"),
+                dotenv.get("IDLE_TIMEOUT"));
+        if (value == null) {
+            return DEFAULT_IDLE_TIMEOUT;
+        }
+        long seconds;
+        try {
+            seconds = Long.parseLong(value.trim());
+        } catch (NumberFormatException ex) {
+            throw new LlmException("Invalid LLM_IDLE_TIMEOUT (expected whole seconds): " + value);
+        }
+        return seconds > 0 ? Duration.ofSeconds(seconds) : Duration.ZERO;
     }
 
     private static String resolve(String primaryKey, String aliasKey, Map<String, String> dotenv) {
@@ -137,11 +174,12 @@ public final class LlmConfig {
         }
         return baseUrl.equals(other.baseUrl)
                 && apiKey.equals(other.apiKey)
-                && model.equals(other.model);
+                && model.equals(other.model)
+                && idleTimeout.equals(other.idleTimeout);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(baseUrl, apiKey, model);
+        return Objects.hash(baseUrl, apiKey, model, idleTimeout);
     }
 }

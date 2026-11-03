@@ -12,6 +12,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
@@ -36,6 +37,8 @@ class LlmClientTest {
             {"choices":[{"message":{"role":"assistant","content":"Hello from model"}}]}
             """;
     private String streamBody;
+    private volatile boolean stallAfterStream;
+    private volatile boolean releaseStalledHandler;
 
     @BeforeEach
     void setUp() throws IOException {
@@ -57,6 +60,23 @@ class LlmClientTest {
         if (streamBody != null) {
             byte[] bytes = streamBody.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
+            if (stallAfterStream) {
+                // Chunked response: write a first event, then stay silent until released.
+                exchange.sendResponseHeaders(200, 0);
+                OutputStream os = exchange.getResponseBody();
+                os.write(bytes);
+                os.flush();
+                while (!releaseStalledHandler) {
+                    try {
+                        Thread.sleep(50);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+                exchange.close();
+                return;
+            }
             exchange.sendResponseHeaders(responseStatus, bytes.length == 0 ? -1 : bytes.length);
             if (bytes.length > 0) {
                 try (OutputStream os = exchange.getResponseBody()) {
@@ -78,6 +98,7 @@ class LlmClientTest {
 
     @AfterEach
     void tearDown() {
+        releaseStalledHandler = true;
         server.stop(0);
     }
 
@@ -297,6 +318,44 @@ class LlmClientTest {
         }
 
         assertEquals(List.of("only"), deltas);
+    }
+
+    @Test
+    void chatStream_stalledUpstream_throwsFriendlyStallError() {
+        stallAfterStream = true;
+        streamBody = "data: {\"choices\":[{\"delta\":{\"content\":\"par\"}}]}\n\n";
+
+        LlmConfig stallConfig = new LlmConfig(
+                config.baseUrl(), config.apiKey(), config.model(), Duration.ofMillis(600));
+        LlmClient client = new LlmClient(stallConfig);
+        List<String> seen = new ArrayList<>();
+
+        long startedAt = System.nanoTime();
+        LlmException ex = assertThrows(LlmException.class, () -> client.chatStream("Hi", seen::add));
+        long elapsedMs = (System.nanoTime() - startedAt) / 1_000_000;
+
+        assertEquals(IdleWatchdog.STALL_MESSAGE, ex.getMessage());
+        assertEquals(List.of("par"), seen);
+        assertTrue(elapsedMs < 10_000, "stall should abort promptly, took " + elapsedMs + "ms");
+    }
+
+    @Test
+    void chatStream_idleWatchdogDisabled_streamCompletesNormally() {
+        streamBody = """
+                data: {"choices":[{"delta":{"content":"quick"}}]}\s
+
+                data: [DONE]\s
+
+                """;
+
+        LlmConfig noWatchdog = new LlmConfig(
+                config.baseUrl(), config.apiKey(), config.model(), Duration.ZERO);
+        LlmClient client = new LlmClient(noWatchdog);
+        List<String> seen = new ArrayList<>();
+        String full = client.chatStream("Hi", seen::add);
+
+        assertEquals("quick", full);
+        assertEquals(List.of("quick"), seen);
     }
 
     @Test

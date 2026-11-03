@@ -28,10 +28,19 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 @RestController
 @RequestMapping("/api/v1/sessions")
 public class SessionController {
+
+    /**
+     * Tomcat's connector-wide async timeout is 30s from the moment the async request
+     * starts, and SSE writes do not reset it. {@code new SseEmitter()} inherits that
+     * default, so any generation longer than 30s is cut mid-stream without a terminal
+     * event. Override it with a ceiling generous enough for the longest answers.
+     */
+    private static final long SSE_TIMEOUT_MS = TimeUnit.MINUTES.toMillis(30);
 
     private final SessionStore sessionStore;
     private final ChatService chatService;
@@ -91,7 +100,7 @@ public class SessionController {
             @PathVariable String id,
             @Valid @RequestBody MessageBody body) {
         Session session = requireSession(username, id);
-        SseEmitter emitter = new SseEmitter();
+        SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
         Thread worker = new Thread(() -> {
             try {
                 String reply = chatService.chatStream(session, body.content(), delta -> {

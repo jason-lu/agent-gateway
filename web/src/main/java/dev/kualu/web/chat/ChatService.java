@@ -62,14 +62,26 @@ public class ChatService {
     public String chatStream(Session session, String content, Consumer<String> onDelta) {
         requireLlm();
         synchronized (session.memory()) {
+            StringBuilder delivered = new StringBuilder();
             try {
                 compress(session);
-                String reply = llmClient.chatStream(session.memory().withUser(content), onDelta);
+                String reply = llmClient.chatStream(session.memory().withUser(content), delta -> {
+                    delivered.append(delta);
+                    onDelta.accept(delta);
+                });
                 session.memory().addUser(content).addAssistant(reply);
                 persistQuietly(session);
                 return reply;
-            } catch (LlmException ex) {
-                throw new UpstreamLlmException(ex.getMessage(), ex);
+            } catch (RuntimeException ex) {
+                // Mid-stream failure (client disconnect, emitter timeout, upstream cut):
+                // the answer up to the cut exists, so keep that turn instead of losing it.
+                if (!delivered.isEmpty()) {
+                    session.memory().addUser(content).addAssistant(delivered.toString());
+                    persistQuietly(session);
+                }
+                throw ex instanceof LlmException llm
+                        ? new UpstreamLlmException(llm.getMessage(), llm)
+                        : ex;
             }
         }
     }

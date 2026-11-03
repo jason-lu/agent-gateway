@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -39,7 +40,7 @@ class ChatServiceStreamTest {
                 store,
                 provider(client),
                 emptyCompressorProvider(),
-                new LlmProperties("http://localhost", "key", "model"));
+                new LlmProperties("http://localhost", "key", "model", 90));
 
         List<String> deltas = new ArrayList<>();
         String reply = service.chatStream(session, "hi", deltas::add);
@@ -61,7 +62,7 @@ class ChatServiceStreamTest {
                 store,
                 provider(client),
                 emptyCompressorProvider(),
-                new LlmProperties("http://localhost", "key", "model"));
+                new LlmProperties("http://localhost", "key", "model", 90));
 
         try {
             service.chat(session, "hi");
@@ -69,6 +70,45 @@ class ChatServiceStreamTest {
             assertTrue(expected.getMessage().contains("boom"));
         }
         assertEquals(0, session.messageCount());
+    }
+
+    @Test
+    void partialReplyIsKeptWhenSendFailsMidStream() {
+        LlmClient client = mock(LlmClient.class);
+        when(client.chatStream(anyList(), any())).thenAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            var onDelta = (java.util.function.Consumer<String>) invocation.getArgument(1);
+            onDelta.accept("Hel");
+            onDelta.accept("lo");
+            return "Hello";
+        });
+
+        InMemorySessionStore store = new InMemorySessionStore();
+        Session session = store.create("ada", null);
+        ChatService service = new ChatService(
+                store,
+                provider(client),
+                emptyCompressorProvider(),
+                new LlmProperties("http://localhost", "key", "model", 90));
+
+        List<String> deltas = new ArrayList<>();
+        IllegalStateException thrown = assertThrows(
+                IllegalStateException.class,
+                () -> service.chatStream(session, "hi", delta -> {
+                    deltas.add(delta);
+                    if (delta.equals("lo")) {
+                        throw new IllegalStateException("SSE send failed");
+                    }
+                }));
+        assertEquals("SSE send failed", thrown.getMessage());
+
+        // The turn survives with the reply produced up to the cut, in the store too.
+        assertEquals(List.of("Hel", "lo"), deltas);
+        assertEquals(2, session.messageCount());
+        Session persisted = store.find("ada", session.id()).orElseThrow();
+        assertEquals(2, persisted.messageCount());
+        assertEquals("hi", persisted.memory().messages().get(0).content());
+        assertEquals("Hello", persisted.memory().messages().get(1).content());
     }
 
     @SuppressWarnings("unchecked")

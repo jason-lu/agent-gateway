@@ -5,6 +5,7 @@ import com.google.gson.JsonObject;
 import dev.kualu.http.HttpClient;
 
 import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -89,13 +90,25 @@ public class LlmClient {
             throw new LlmException(LlmErrorMessages.forHttp(status, raw), status, raw);
         }
 
-        return lines
+        return guardIdle(lines)
                 .map(String::trim)
                 .filter(SseContentDeltas::isDataLine)
                 .map(SseContentDeltas::dataOf)
                 .takeWhile(data -> !"[DONE]".equals(data))
                 .map(SseContentDeltas::extract)
                 .filter(Objects::nonNull);
+    }
+
+    /**
+     * Wraps the raw line stream with stall detection so a silent upstream aborts
+     * with {@link IdleWatchdog#STALL_MESSAGE} instead of hanging forever.
+     */
+    private Stream<String> guardIdle(Stream<String> lines) {
+        Duration idleTimeout = config.idleTimeout();
+        if (idleTimeout.isZero() || idleTimeout.isNegative()) {
+            return lines;
+        }
+        return new IdleWatchdog(lines, idleTimeout).watch();
     }
 
     /**

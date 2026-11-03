@@ -9,6 +9,7 @@ import dev.kualu.web.auth.JwtAuthenticationFilter;
 import dev.kualu.web.auth.UserPasswordStore;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import java.time.Duration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -100,7 +101,11 @@ public class AppConfig {
         if (!properties.isConfigured()) {
             return null;
         }
-        return new LlmClient(new LlmConfig(properties.baseUrl(), properties.apiKey(), properties.model()));
+        return new LlmClient(new LlmConfig(
+                properties.baseUrl(),
+                properties.apiKey(),
+                properties.model(),
+                Duration.ofSeconds(properties.idleTimeoutSeconds())));
     }
 
     @Bean

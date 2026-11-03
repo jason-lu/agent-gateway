@@ -20,6 +20,8 @@ llm:
   base-url: ${LLM_BASE_URL:${BASE_URL:}}
   api-key: ${LLM_API_KEY:${API_KEY:}}
   model: ${LLM_MODEL:${MODEL:}}
+  # Whole seconds a stream may stay silent before it is aborted (0 disables).
+  idle-timeout-seconds: ${LLM_IDLE_TIMEOUT:90}
 
 agent:
   store: ${AGENT_STORE:postgres}
