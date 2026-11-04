@@ -1,8 +1,10 @@
 package dev.kualu.web.chat;
 
+import dev.kualu.llm.AgentTool;
 import dev.kualu.llm.LlmClient;
 import dev.kualu.llm.LlmException;
 import dev.kualu.llm.MemoryCompressor;
+import dev.kualu.llm.ToolLoop;
 import dev.kualu.web.api.ApiDtos.HistoryMessage;
 import dev.kualu.web.config.LlmProperties;
 import dev.kualu.web.session.Session;
@@ -17,6 +19,7 @@ import java.util.function.Consumer;
 
 /**
  * Turns HTTP chat operations into llm-core calls and session updates.
+ * Tool calls (the exec tool) are run by {@link ToolLoop} inside the turn.
  */
 @Service
 public class ChatService {
@@ -27,16 +30,19 @@ public class ChatService {
     private final LlmClient llmClient;
     private final MemoryCompressor compressor;
     private final LlmProperties llmProperties;
+    private final ToolLoop toolLoop;
 
     public ChatService(
             SessionStore sessionStore,
             ObjectProvider<LlmClient> llmClients,
             ObjectProvider<MemoryCompressor> compressors,
-            LlmProperties llmProperties) {
+            LlmProperties llmProperties,
+            List<AgentTool> tools) {
         this.sessionStore = sessionStore;
         this.llmClient = llmClients.getIfAvailable();
         this.compressor = compressors.getIfAvailable();
         this.llmProperties = llmProperties;
+        this.toolLoop = this.llmClient == null ? null : new ToolLoop(this.llmClient, tools);
     }
 
     public boolean isLlmConfigured() {
@@ -49,8 +55,8 @@ public class ChatService {
         synchronized (session.memory()) {
             try {
                 compress(session);
-                String reply = llmClient.chat(session.memory().withUser(content));
-                session.memory().addUser(content).addAssistant(reply);
+                // The tool loop commits the user turn, any tool rounds, and the reply.
+                String reply = toolLoop.run(session.memory(), content);
                 persistQuietly(session);
                 return reply;
             } catch (LlmException ex) {
@@ -62,23 +68,16 @@ public class ChatService {
     public String chatStream(Session session, String content, Consumer<String> onDelta) {
         requireLlm();
         synchronized (session.memory()) {
-            StringBuilder delivered = new StringBuilder();
             try {
                 compress(session);
-                String reply = llmClient.chatStream(session.memory().withUser(content), delta -> {
-                    delivered.append(delta);
-                    onDelta.accept(delta);
-                });
-                session.memory().addUser(content).addAssistant(reply);
+                String reply = toolLoop.run(session.memory(), content, onDelta);
                 persistQuietly(session);
                 return reply;
             } catch (RuntimeException ex) {
                 // Mid-stream failure (client disconnect, emitter timeout, upstream cut):
-                // the answer up to the cut exists, so keep that turn instead of losing it.
-                if (!delivered.isEmpty()) {
-                    session.memory().addUser(content).addAssistant(delivered.toString());
-                    persistQuietly(session);
-                }
+                // the tool loop has already committed whatever happened, so the turn
+                // survives instead of being lost.
+                persistQuietly(session);
                 throw ex instanceof LlmException llm
                         ? new UpstreamLlmException(llm.getMessage(), llm)
                         : ex;
@@ -89,7 +88,8 @@ public class ChatService {
     public List<HistoryMessage> history(Session session) {
         synchronized (session.memory()) {
             return session.memory().messages().stream()
-                    .filter(message -> "user".equals(message.role()) || "assistant".equals(message.role()))
+                    .filter(message -> "user".equals(message.role())
+                            || ("assistant".equals(message.role()) && !message.content().isBlank()))
                     .map(message -> new HistoryMessage(message.role(), message.content()))
                     .toList();
         }

@@ -97,6 +97,28 @@ class ConversationMemoryTest {
     }
 
     @Test
+    void assistantToolCalls_carriesTheCallList() {
+        List<ToolCall> calls = List.of(new ToolCall("call_1", "exec", "{\"command\":\"ls\"}"));
+        ChatMessage message = ChatMessage.assistantToolCalls("", calls);
+
+        assertEquals("assistant", message.role());
+        assertEquals("", message.content());
+        assertEquals(null, message.toolCallId());
+        assertEquals(1, message.toolCalls().size());
+        assertEquals("call_1", message.toolCalls().get(0).id());
+    }
+
+    @Test
+    void assistantToolCalls_validatesShape() {
+        assertThrows(IllegalArgumentException.class,
+                () -> ChatMessage.assistantToolCalls("x", List.of()));
+        assertThrows(IllegalArgumentException.class,
+                () -> new ChatMessage("tool", "x", "call_1", List.of(new ToolCall("c", "exec", "{}"))));
+        assertThrows(IllegalArgumentException.class,
+                () -> new ChatMessage("assistant", "x", "call_1", List.of(new ToolCall("c", "exec", "{}"))));
+    }
+
+    @Test
     void replaceAll_replacesStoredTurns() {
         ConversationMemory memory = new ConversationMemory()
                 .addUser("old")

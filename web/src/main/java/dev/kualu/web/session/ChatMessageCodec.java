@@ -1,6 +1,7 @@
 package dev.kualu.web.session;
 
 import dev.kualu.llm.ChatMessage;
+import dev.kualu.llm.ToolCall;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -25,7 +26,7 @@ public final class ChatMessageCodec {
         this.mapper = mapper;
     }
 
-    /** @return a JSON array; {@code toolCallId} is omitted when absent */
+    /** @return a JSON array; {@code toolCallId} and {@code toolCalls} are omitted when absent */
     public String encode(List<ChatMessage> messages) {
         ArrayNode array = mapper.createArrayNode();
         for (ChatMessage message : messages) {
@@ -34,6 +35,15 @@ public final class ChatMessageCodec {
             node.put("content", message.content());
             if (message.toolCallId() != null) {
                 node.put("toolCallId", message.toolCallId());
+            }
+            if (message.toolCalls() != null) {
+                ArrayNode calls = node.putArray("toolCalls");
+                for (ToolCall call : message.toolCalls()) {
+                    ObjectNode callNode = calls.addObject();
+                    callNode.put("id", call.id());
+                    callNode.put("name", call.name());
+                    callNode.put("arguments", call.arguments());
+                }
             }
         }
         return array.toString();
@@ -55,8 +65,24 @@ public final class ChatMessageCodec {
             messages.add(new ChatMessage(
                     node.get("role").asText(),
                     node.get("content").asText(),
-                    toolCallId));
+                    toolCallId,
+                    decodeToolCalls(node.get("toolCalls"))));
         }
         return List.copyOf(messages);
+    }
+
+    /** @return {@code null} when the node is absent or carries no calls */
+    private static List<ToolCall> decodeToolCalls(JsonNode callsNode) {
+        if (callsNode == null || !callsNode.isArray() || callsNode.size() == 0) {
+            return null;
+        }
+        List<ToolCall> calls = new ArrayList<>(callsNode.size());
+        for (JsonNode callNode : callsNode) {
+            calls.add(new ToolCall(
+                    callNode.get("id").asText(),
+                    callNode.get("name").asText(),
+                    callNode.get("arguments").asText()));
+        }
+        return List.copyOf(calls);
     }
 }

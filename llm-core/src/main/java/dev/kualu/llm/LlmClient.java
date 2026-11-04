@@ -2,6 +2,7 @@ package dev.kualu.llm;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import dev.kualu.http.HttpClient;
 
 import java.net.http.HttpResponse;
@@ -20,6 +21,8 @@ import java.util.stream.Stream;
  *   <li>{@link #chat(String)} / {@link #chat(List)} — full reply text</li>
  *   <li>{@link #chatStream(String)} / {@link #chatStream(List)} — SSE text deltas as a {@link Stream}</li>
  *   <li>{@link #chatStream(String, Consumer)} / {@link #chatStream(List, Consumer)} — SSE deltas via callback</li>
+ *   <li>{@link #complete(List, List)} / {@link #completeStream(List, List, Consumer)} — text plus
+ *       any {@code tool_calls} the model requested (function calling)</li>
  * </ul>
  *
  * <p>Pass a full {@link List} of {@link ChatMessage} for multi-turn memory; the
@@ -60,8 +63,18 @@ public class LlmClient {
     /** Sends the given conversation turns and returns the full assistant reply text. */
     public String chat(List<ChatMessage> messages) {
         HttpResponse<String> response =
-                http.post(completionsUrl(), headers(false), requestJson(messages, false));
+                http.post(completionsUrl(), headers(false), requestJson(messages, false, List.of()));
         return ChatResponses.assistantText(response);
+    }
+
+    /**
+     * Sends the given conversation turns with the tool definitions and returns the
+     * completed turn: the reply text plus any tool calls the model requested.
+     */
+    public AssistantTurn complete(List<ChatMessage> messages, List<ToolSpec> tools) {
+        HttpResponse<String> response =
+                http.post(completionsUrl(), headers(false), requestJson(messages, false, tools));
+        return ChatResponses.assistantTurn(response);
     }
 
     /**
@@ -77,8 +90,57 @@ public class LlmClient {
      * The returned stream must be closed to release the HTTP connection.
      */
     public Stream<String> chatStream(List<ChatMessage> messages) {
+        return deltaStream(messages, List.of())
+                .map(SseDelta::text)
+                .filter(Objects::nonNull);
+    }
+
+    /**
+     * Streams assistant text deltas to {@code onDelta} and returns the full reply text.
+     */
+    public String chatStream(String userMessage, Consumer<String> onDelta) {
+        return chatStream(List.of(ChatMessage.user(userMessage)), onDelta);
+    }
+
+    /**
+     * Streams assistant text deltas for the given conversation turns to {@code onDelta}
+     * and returns the full reply text.
+     */
+    public String chatStream(List<ChatMessage> messages, Consumer<String> onDelta) {
+        Objects.requireNonNull(onDelta, "onDelta");
+        StringBuilder full = new StringBuilder();
+        try (Stream<String> deltas = chatStream(messages)) {
+            deltas.forEach(delta -> {
+                full.append(delta);
+                onDelta.accept(delta);
+            });
+        }
+        return full.toString();
+    }
+
+    /**
+     * Streams the turn with tool definitions: text deltas go to {@code onDelta}, and the
+     * returned turn carries the full reply text plus any tool calls the model requested.
+     */
+    public AssistantTurn completeStream(List<ChatMessage> messages, List<ToolSpec> tools, Consumer<String> onDelta) {
+        Objects.requireNonNull(onDelta, "onDelta");
+        StringBuilder full = new StringBuilder();
+        ToolCallAccumulator calls = new ToolCallAccumulator();
+        try (Stream<SseDelta> deltas = deltaStream(messages, tools)) {
+            deltas.forEach(delta -> {
+                if (delta.text() != null) {
+                    full.append(delta.text());
+                    onDelta.accept(delta.text());
+                }
+                delta.fragments().forEach(calls::add);
+            });
+        }
+        return new AssistantTurn(full.toString(), calls.finish());
+    }
+
+    private Stream<SseDelta> deltaStream(List<ChatMessage> messages, List<ToolSpec> tools) {
         HttpResponse<Stream<String>> response =
-                http.postLines(completionsUrl(), headers(true), requestJson(messages, true));
+                http.postLines(completionsUrl(), headers(true), requestJson(messages, true, tools));
 
         Stream<String> lines = response.body();
         int status = response.statusCode();
@@ -111,29 +173,6 @@ public class LlmClient {
         return new IdleWatchdog(lines, idleTimeout).watch();
     }
 
-    /**
-     * Streams assistant text deltas to {@code onDelta} and returns the full reply text.
-     */
-    public String chatStream(String userMessage, Consumer<String> onDelta) {
-        return chatStream(List.of(ChatMessage.user(userMessage)), onDelta);
-    }
-
-    /**
-     * Streams assistant text deltas for the given conversation turns to {@code onDelta}
-     * and returns the full reply text.
-     */
-    public String chatStream(List<ChatMessage> messages, Consumer<String> onDelta) {
-        Objects.requireNonNull(onDelta, "onDelta");
-        StringBuilder full = new StringBuilder();
-        try (Stream<String> deltas = chatStream(messages)) {
-            deltas.forEach(delta -> {
-                full.append(delta);
-                onDelta.accept(delta);
-            });
-        }
-        return full.toString();
-    }
-
     private Map<String, String> headers(boolean stream) {
         Map<String, String> headers = new LinkedHashMap<>();
         headers.put("Authorization", "Bearer " + config.apiKey());
@@ -142,7 +181,7 @@ public class LlmClient {
         return headers;
     }
 
-    private String requestJson(List<ChatMessage> messages, boolean stream) {
+    private String requestJson(List<ChatMessage> messages, boolean stream, List<ToolSpec> tools) {
         if (messages == null || messages.isEmpty()) {
             throw new LlmException("messages must not be empty");
         }
@@ -150,7 +189,8 @@ public class LlmClient {
         JsonArray array = new JsonArray();
         for (ChatMessage message : messages) {
             Objects.requireNonNull(message, "message");
-            if (message.content().isBlank()) {
+            boolean carriesTools = message.toolCalls() != null || "tool".equals(message.role());
+            if (message.content().isBlank() && !carriesTools) {
                 throw new LlmException("message content must not be blank");
             }
             JsonObject item = new JsonObject();
@@ -159,12 +199,40 @@ public class LlmClient {
             if (message.toolCallId() != null) {
                 item.addProperty("tool_call_id", message.toolCallId());
             }
+            if (message.toolCalls() != null) {
+                JsonArray calls = new JsonArray();
+                for (ToolCall call : message.toolCalls()) {
+                    JsonObject function = new JsonObject();
+                    function.addProperty("name", call.name());
+                    function.addProperty("arguments", call.arguments());
+                    JsonObject callItem = new JsonObject();
+                    callItem.addProperty("id", call.id());
+                    callItem.addProperty("type", "function");
+                    callItem.add("function", function);
+                    calls.add(callItem);
+                }
+                item.add("tool_calls", calls);
+            }
             array.add(item);
         }
 
         JsonObject body = new JsonObject();
         body.addProperty("model", config.model());
         body.add("messages", array);
+        if (tools != null && !tools.isEmpty()) {
+            JsonArray toolArray = new JsonArray();
+            for (ToolSpec tool : tools) {
+                JsonObject function = new JsonObject();
+                function.addProperty("name", tool.name());
+                function.addProperty("description", tool.description());
+                function.add("parameters", JsonParser.parseString(tool.parametersJson()));
+                JsonObject toolItem = new JsonObject();
+                toolItem.addProperty("type", "function");
+                toolItem.add("function", function);
+                toolArray.add(toolItem);
+            }
+            body.add("tools", toolArray);
+        }
         if (stream) {
             body.addProperty("stream", true);
         }

@@ -34,6 +34,13 @@ agent:
     max-messages: ${AGENT_MEMORY_MAX_MESSAGES:20}
     keep-messages: ${AGENT_MEMORY_KEEP_MESSAGES:8}
     instruction: ${AGENT_MEMORY_INSTRUCTION:}
+  tools:
+    exec:
+      # Allows the model to run system commands through the exec tool.
+      enabled: ${AGENT_EXEC_ENABLED:true}
+      timeout-seconds: ${AGENT_EXEC_TIMEOUT:60}
+      output-limit: ${AGENT_EXEC_OUTPUT_LIMIT:8000}
+      workdir: ${AGENT_EXEC_WORKDIR:}
   security:
     jwt-secret: ${AGENT_JWT_SECRET:}
     jwt-ttl: ${AGENT_JWT_TTL:2h}

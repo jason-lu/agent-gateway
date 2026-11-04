@@ -38,6 +38,31 @@ class ChatMessageCodecTest {
     }
 
     @Test
+    void toolCalls_surviveTheRoundTrip() {
+        List<ChatMessage> original = List.of(
+                ChatMessage.user("run ls"),
+                ChatMessage.assistantToolCalls("let me look",
+                        List.of(new dev.kualu.llm.ToolCall("call_1", "exec", "{\"command\":\"ls\"}"))),
+                ChatMessage.tool("", "call_1"),
+                ChatMessage.assistant("done"));
+
+        List<ChatMessage> decoded = codec.decode(codec.encode(original));
+
+        assertEquals(original, decoded);
+        assertEquals("call_1", decoded.get(1).toolCalls().get(0).id());
+        assertEquals("exec", decoded.get(1).toolCalls().get(0).name());
+        assertEquals("{\"command\":\"ls\"}", decoded.get(1).toolCalls().get(0).arguments());
+        assertEquals("", decoded.get(2).content());
+    }
+
+    @Test
+    void toolCalls_areOmittedFromJsonWhenAbsent() {
+        String json = codec.encode(List.of(ChatMessage.user("hi")));
+
+        assertFalse(json.contains("toolCalls"), "absent calls must not be written: " + json);
+    }
+
+    @Test
     void nullToolCallId_isOmittedFromJsonButNotConfusedWithEmpty() {
         String json = codec.encode(List.of(ChatMessage.user("hi")));
 

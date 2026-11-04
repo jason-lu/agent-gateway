@@ -178,6 +178,12 @@ public final class MemoryCompressor {
             if (turn.toolCallId() != null) {
                 sb.append(" (toolCallId=").append(turn.toolCallId()).append(')');
             }
+            if (turn.toolCalls() != null) {
+                for (ToolCall call : turn.toolCalls()) {
+                    sb.append(" (tool call ").append(call.name())
+                            .append(": ").append(call.arguments()).append(')');
+                }
+            }
             sb.append('\n');
         }
         return sb.toString();

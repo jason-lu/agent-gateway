@@ -472,4 +472,151 @@ class LlmClientTest {
         assertEquals("Hello!", full);
         assertEquals(List.of("Hel", "lo!"), seen);
     }
+
+    private static List<ToolSpec> execTools() {
+        return List.of(new ToolSpec("exec", "run a command", "{\"type\":\"object\"}"));
+    }
+
+    @Test
+    void complete_sendsToolsAndParsesToolCalls() {
+        responseBody = """
+                {"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[
+                  {"id":"call_1","type":"function","function":{"name":"exec","arguments":"{\\"command\\":\\"ls\\"}"}}
+                ]}}]}
+                """;
+
+        LlmClient client = new LlmClient(config);
+        AssistantTurn turn = client.complete(List.of(ChatMessage.user("run ls")), execTools());
+
+        assertTrue(turn.hasToolCalls());
+        assertEquals("", turn.content());
+        assertEquals(1, turn.toolCalls().size());
+        assertEquals("call_1", turn.toolCalls().get(0).id());
+        assertEquals("exec", turn.toolCalls().get(0).name());
+        assertEquals("{\"command\":\"ls\"}", turn.toolCalls().get(0).arguments());
+
+        JsonObject body = JsonParser.parseString(capturedBody.get()).getAsJsonObject();
+        JsonObject tool = body.getAsJsonArray("tools").get(0).getAsJsonObject();
+        assertEquals("function", tool.get("type").getAsString());
+        assertEquals("exec", tool.getAsJsonObject("function").get("name").getAsString());
+        assertEquals("run a command", tool.getAsJsonObject("function").get("description").getAsString());
+        assertEquals("object",
+                tool.getAsJsonObject("function").getAsJsonObject("parameters").get("type").getAsString());
+    }
+
+    @Test
+    void complete_withoutTools_sendsNoToolsArray() {
+        responseBody = """
+                {"choices":[{"message":{"role":"assistant","content":"hi"}}]}
+                """;
+
+        LlmClient client = new LlmClient(config);
+        AssistantTurn turn = client.complete(List.of(ChatMessage.user("hi")), List.of());
+
+        assertEquals("hi", turn.content());
+        assertFalse(turn.hasToolCalls());
+        assertFalse(capturedBody.get().contains("\"tools\""));
+    }
+
+    @Test
+    void complete_serializesAssistantToolCallTurnsAndEmptyToolResults() {
+        responseBody = """
+                {"choices":[{"message":{"role":"assistant","content":"done"}}]}
+                """;
+
+        LlmClient client = new LlmClient(config);
+        client.complete(List.of(
+                ChatMessage.user("run ls"),
+                ChatMessage.assistantToolCalls("", List.of(new ToolCall("call_1", "exec", "{\"command\":\"ls\"}"))),
+                ChatMessage.tool("", "call_1")), execTools());
+
+        JsonObject body = JsonParser.parseString(capturedBody.get()).getAsJsonObject();
+        var messages = body.getAsJsonArray("messages");
+
+        JsonObject assistant = messages.get(1).getAsJsonObject();
+        assertEquals("assistant", assistant.get("role").getAsString());
+        JsonObject call = assistant.getAsJsonArray("tool_calls").get(0).getAsJsonObject();
+        assertEquals("call_1", call.get("id").getAsString());
+        assertEquals("function", call.get("type").getAsString());
+        assertEquals("exec", call.getAsJsonObject("function").get("name").getAsString());
+        assertEquals("{\"command\":\"ls\"}", call.getAsJsonObject("function").get("arguments").getAsString());
+
+        JsonObject toolResult = messages.get(2).getAsJsonObject();
+        assertEquals("tool", toolResult.get("role").getAsString());
+        assertEquals("", toolResult.get("content").getAsString());
+        assertEquals("call_1", toolResult.get("tool_call_id").getAsString());
+    }
+
+    @Test
+    void complete_contentlessResponseWithoutToolCalls_throws() {
+        responseBody = """
+                {"choices":[{"message":{"role":"assistant","content":null}}]}
+                """;
+
+        LlmClient client = new LlmClient(config);
+        LlmException ex = assertThrows(LlmException.class,
+                () -> client.complete(List.of(ChatMessage.user("hi")), execTools()));
+
+        assertTrue(ex.getMessage().contains("had no content"));
+    }
+
+    @Test
+    void completeStream_accumulatesToolCallFragments() {
+        streamBody = """
+                data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_9","type":"function","function":{"name":"exec","arguments":""}}]}}]}\s
+
+                data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"comm"}}]}}]}\s
+
+                data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"and\\":\\"ls\\"}"}}]}}]}\s
+
+                data: [DONE]\s
+
+                """;
+
+        LlmClient client = new LlmClient(config);
+        List<String> seen = new ArrayList<>();
+        AssistantTurn turn = client.completeStream(List.of(ChatMessage.user("run ls")), execTools(), seen::add);
+
+        assertEquals(List.of(), seen);
+        assertTrue(turn.hasToolCalls());
+        assertEquals("call_9", turn.toolCalls().get(0).id());
+        assertEquals("exec", turn.toolCalls().get(0).name());
+        assertEquals("{\"command\":\"ls\"}", turn.toolCalls().get(0).arguments());
+    }
+
+    @Test
+    void completeStream_mixedTextAndToolCallsInOneTurn() {
+        streamBody = """
+                data: {"choices":[{"delta":{"content":"let me look"}}]}\s
+
+                data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"exec","arguments":"{}"}}]}}]}\s
+
+                data: [DONE]\s
+
+                """;
+
+        LlmClient client = new LlmClient(config);
+        List<String> seen = new ArrayList<>();
+        AssistantTurn turn = client.completeStream(List.of(ChatMessage.user("hi")), execTools(), seen::add);
+
+        assertEquals(List.of("let me look"), seen);
+        assertEquals("let me look", turn.content());
+        assertEquals(1, turn.toolCalls().size());
+    }
+
+    @Test
+    void completeStream_toolCallMissingItsId_throws() {
+        streamBody = """
+                data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"exec","arguments":"{}"}}]}}]}\s
+
+                data: [DONE]\s
+
+                """;
+
+        LlmClient client = new LlmClient(config);
+        LlmException ex = assertThrows(LlmException.class,
+                () -> client.completeStream(List.of(ChatMessage.user("hi")), execTools(), d -> {}));
+
+        assertTrue(ex.getMessage().contains("id or name"), ex.getMessage());
+    }
 }

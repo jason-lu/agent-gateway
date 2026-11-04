@@ -68,7 +68,8 @@ class PostgresWebSmokeTest {
 
     @Test
     void login_createSession_chat_allWorkAgainstTheDatabase() throws Exception {
-        when(llmClient.chat(anyList())).thenReturn("nice to meet you");
+        when(llmClient.complete(anyList(), anyList()))
+                .thenReturn(new dev.kualu.llm.AssistantTurn("nice to meet you", java.util.List.of()));
 
         String token = mockMvc.perform(post("/api/v1/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)

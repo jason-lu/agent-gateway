@@ -40,7 +40,7 @@ class ChatServiceStreamTest {
                 store,
                 provider(client),
                 emptyCompressorProvider(),
-                new LlmProperties("http://localhost", "key", "model", 90));
+                new LlmProperties("http://localhost", "key", "model", 90), List.of());
 
         List<String> deltas = new ArrayList<>();
         String reply = service.chatStream(session, "hi", deltas::add);
@@ -62,7 +62,7 @@ class ChatServiceStreamTest {
                 store,
                 provider(client),
                 emptyCompressorProvider(),
-                new LlmProperties("http://localhost", "key", "model", 90));
+                new LlmProperties("http://localhost", "key", "model", 90), List.of());
 
         try {
             service.chat(session, "hi");
@@ -89,7 +89,7 @@ class ChatServiceStreamTest {
                 store,
                 provider(client),
                 emptyCompressorProvider(),
-                new LlmProperties("http://localhost", "key", "model", 90));
+                new LlmProperties("http://localhost", "key", "model", 90), List.of());
 
         List<String> deltas = new ArrayList<>();
         IllegalStateException thrown = assertThrows(

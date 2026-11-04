@@ -267,11 +267,13 @@ class MemoryCompressorTest {
     void summarizePrompt_formatsPreviousSummaryAndTurns() {
         String prompt = MemoryCompressor.summarizePrompt(null, List.of(
                 ChatMessage.user("hello"),
-                ChatMessage.tool("result", "call_1")));
+                ChatMessage.tool("result", "call_1"),
+                ChatMessage.assistantToolCalls("", List.of(new ToolCall("call_2", "exec", "{\"command\":\"ls\"}")))));
 
         assertTrue(prompt.contains("(none)"));
         assertTrue(prompt.contains("user: hello"));
         assertTrue(prompt.contains("tool: result (toolCallId=call_1)"));
+        assertTrue(prompt.contains("(tool call exec: {\"command\":\"ls\"})"));
 
         String withSummary = MemoryCompressor.summarizePrompt("old body", List.of(ChatMessage.user("x")));
         assertTrue(withSummary.contains("old body"));

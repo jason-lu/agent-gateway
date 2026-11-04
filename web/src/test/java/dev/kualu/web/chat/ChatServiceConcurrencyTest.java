@@ -36,7 +36,7 @@ class ChatServiceConcurrencyTest {
                 store,
                 provider(client),
                 emptyCompressorProvider(),
-                new LlmProperties("http://localhost", "key", "model", 90));
+                new LlmProperties("http://localhost", "key", "model", 90), List.of());
 
         int workers = 8;
         CountDownLatch start = new CountDownLatch(1);

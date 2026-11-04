@@ -1,6 +1,7 @@
 package dev.kualu.web.config;
 
 import tools.jackson.databind.ObjectMapper;
+import dev.kualu.llm.ExecTool;
 import dev.kualu.llm.LlmClient;
 import dev.kualu.llm.LlmConfig;
 import dev.kualu.llm.MemoryCompressor;
@@ -10,6 +11,7 @@ import dev.kualu.web.auth.JwtAuthenticationFilter;
 import dev.kualu.web.auth.UserPasswordStore;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import java.nio.file.Path;
 import java.time.Duration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -134,6 +136,24 @@ public class AppConfig {
                 properties.maxMessages(), properties.keepMessages());
         return new MemoryCompressor(
                 llmClient, properties.maxMessages(), properties.keepMessages(), properties.instruction());
+    }
+
+    /**
+     * The exec tool lets the model run system commands; it exists only when enabled.
+     * {@code ChatService} picks up every {@code AgentTool} bean.
+     */
+    @Bean
+    @ConditionalOnProperty(name = "agent.tools.exec.enabled", havingValue = "true", matchIfMissing = true)
+    public ExecTool execTool(ExecToolProperties properties) {
+        String workdir = properties.workdir() == null || properties.workdir().isBlank()
+                ? null
+                : properties.workdir();
+        log.info("exec-tool configured: enabled=true, timeout={}s, output-limit={}, workdir={}",
+                properties.timeoutSeconds(), properties.outputLimit(), workdir == null ? "(inherited)" : workdir);
+        return new ExecTool(new ExecTool.Config(
+                Duration.ofSeconds(properties.timeoutSeconds()),
+                properties.outputLimit(),
+                workdir == null ? null : Path.of(workdir)));
     }
 
     private static AccessDeniedHandler accessDeniedHandler(ObjectMapper objectMapper) {

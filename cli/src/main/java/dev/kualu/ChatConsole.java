@@ -1,10 +1,13 @@
 package dev.kualu;
 
+import dev.kualu.llm.AgentTool;
 import dev.kualu.llm.ChatMessage;
 import dev.kualu.llm.ConversationMemory;
 import dev.kualu.llm.LlmClient;
 import dev.kualu.llm.LlmException;
 import dev.kualu.llm.MemoryCompressor;
+import dev.kualu.llm.ToolCall;
+import dev.kualu.llm.ToolLoop;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -21,6 +24,7 @@ import java.util.Objects;
  *
  * <p>Keeps a {@link ConversationMemory} so each turn sees prior context.
  * Use {@code /clear} to reset memory and {@code /history} to inspect it.
+ * Tool calls (the exec tool) are run by {@link ToolLoop} inside the turn.
  */
 public class ChatConsole {
 
@@ -29,21 +33,29 @@ public class ChatConsole {
     private final PrintStream out;
     private final ConversationMemory memory;
     private final MemoryCompressor compressor;
+    private final ToolLoop toolLoop;
     private boolean streaming;
 
-    /** Runs without memory compression. */
+    /** Runs without memory compression or tools. */
     public ChatConsole(LlmClient client, BufferedReader in, PrintStream out, boolean streaming) {
-        this(client, in, out, streaming, null);
+        this(client, in, out, streaming, null, List.of());
     }
 
     /** @param compressor folds old turns into a summary; {@code null} disables compression */
     public ChatConsole(LlmClient client, BufferedReader in, PrintStream out, boolean streaming,
                        MemoryCompressor compressor) {
+        this(client, in, out, streaming, compressor, List.of());
+    }
+
+    /** @param tools tools the model may call (e.g. {@code ExecTool}); empty disables tool calling */
+    public ChatConsole(LlmClient client, BufferedReader in, PrintStream out, boolean streaming,
+                       MemoryCompressor compressor, List<AgentTool> tools) {
         this.client = Objects.requireNonNull(client, "client");
         this.in = Objects.requireNonNull(in, "in");
         this.out = Objects.requireNonNull(out, "out");
         this.memory = new ConversationMemory();
         this.compressor = compressor;
+        this.toolLoop = new ToolLoop(client, tools);
         this.streaming = streaming;
     }
 
@@ -175,12 +187,16 @@ public class ChatConsole {
         out.println("History (" + messages.size() + " turn(s)):");
         for (int i = 0; i < messages.size(); i++) {
             ChatMessage message = messages.get(i);
-            out.println("  " + (i + 1) + ". [" + message.role() + "] " + preview(message.content()));
+            out.println("  " + (i + 1) + ". [" + message.role() + "] " + preview(message));
         }
     }
 
-    private static String preview(String content) {
-        String oneLine = content.replace('\n', ' ');
+    private static String preview(ChatMessage message) {
+        if (message.content().isBlank() && message.toolCalls() != null) {
+            return "tool calls: " + String.join(", ",
+                    message.toolCalls().stream().map(ToolCall::name).toList());
+        }
+        String oneLine = message.content().replace('\n', ' ');
         return oneLine.length() <= 80 ? oneLine : oneLine.substring(0, 77) + "...";
     }
 
@@ -188,23 +204,20 @@ public class ChatConsole {
         if (compressor != null) {
             compressor.maybeCompress(memory, "cli");
         }
-        List<ChatMessage> payload = memory.withUser(message);
         out.print("assistant: ");
         out.flush();
         try {
             String reply;
             if (streaming) {
-                reply = client.chatStream(payload, delta -> {
+                reply = toolLoop.run(memory, message, delta -> {
                     out.print(delta);
                     out.flush();
                 });
             } else {
-                reply = client.chat(payload);
+                reply = toolLoop.run(memory, message);
                 out.print(reply);
             }
             out.println();
-            memory.addUser(message);
-            memory.addAssistant(reply);
         } catch (LlmException e) {
             out.println();
             out.println("error: " + e.getMessage());

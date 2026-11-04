@@ -6,6 +6,9 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonSyntaxException;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * Parses OpenAI-style SSE chat-completion events into content deltas.
  * Accepts the {@code data:} payload of a single SSE line.
@@ -23,8 +26,8 @@ final class SseContentDeltas {
         return line.substring("data:".length()).trim();
     }
 
-    /** Returns the text delta in {@code data}, or {@code null} if the event carries none. */
-    static String extract(String data) {
+    /** Returns the delta carried by {@code data}, or {@code null} if the event carries none. */
+    static SseDelta extract(String data) {
         if (data.isBlank()) {
             return null;
         }
@@ -53,14 +56,65 @@ final class SseContentDeltas {
         if (deltaEl == null || !deltaEl.isJsonObject()) {
             return null;
         }
-        JsonElement content = deltaEl.getAsJsonObject().get("content");
-        if (content == null || content.isJsonNull()) {
+        JsonObject delta = deltaEl.getAsJsonObject();
+
+        String text = null;
+        JsonElement content = delta.get("content");
+        if (content != null && !content.isJsonNull()
+                && content.isJsonPrimitive() && content.getAsJsonPrimitive().isString()) {
+            text = content.getAsString();
+            if (text.isEmpty()) {
+                text = null;
+            }
+        }
+
+        List<ToolCallFragment> fragments = parseFragments(delta.get("tool_calls"));
+        if (text == null && fragments.isEmpty()) {
             return null;
         }
-        if (!content.isJsonPrimitive() || !content.getAsJsonPrimitive().isString()) {
+        return new SseDelta(text, fragments);
+    }
+
+    private static List<ToolCallFragment> parseFragments(JsonElement toolCallsEl) {
+        if (toolCallsEl == null || toolCallsEl.isJsonNull()) {
+            return List.of();
+        }
+        if (!toolCallsEl.isJsonArray()) {
+            throw new LlmException("LLM stream event tool_calls was not an array");
+        }
+        JsonArray array = toolCallsEl.getAsJsonArray();
+        List<ToolCallFragment> fragments = new ArrayList<>(array.size());
+        for (JsonElement item : array) {
+            if (item == null || !item.isJsonObject()) {
+                continue;
+            }
+            JsonObject call = item.getAsJsonObject();
+            int index = 0;
+            JsonElement indexEl = call.get("index");
+            if (indexEl != null && indexEl.isJsonPrimitive() && indexEl.getAsJsonPrimitive().isNumber()) {
+                index = indexEl.getAsInt();
+            }
+            String id = stringOrNull(call.get("id"));
+            String name = null;
+            String argumentsChunk = null;
+            JsonElement functionEl = call.get("function");
+            if (functionEl != null && functionEl.isJsonObject()) {
+                JsonObject function = functionEl.getAsJsonObject();
+                name = stringOrNull(function.get("name"));
+                argumentsChunk = stringOrNull(function.get("arguments"));
+            }
+            fragments.add(new ToolCallFragment(index, id, name, argumentsChunk));
+        }
+        return List.copyOf(fragments);
+    }
+
+    private static String stringOrNull(JsonElement element) {
+        if (element == null || element.isJsonNull()) {
             return null;
         }
-        String text = content.getAsString();
-        return text.isEmpty() ? null : text;
+        if (!element.isJsonPrimitive() || !element.getAsJsonPrimitive().isString()) {
+            return null;
+        }
+        return element.getAsString();
     }
 }

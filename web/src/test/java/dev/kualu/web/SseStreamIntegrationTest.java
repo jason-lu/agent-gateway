@@ -46,12 +46,12 @@ class SseStreamIntegrationTest {
 
     @Test
     void streamEmitsDeltaThenDone() throws Exception {
-        when(llmClient.chatStream(anyList(), any())).thenAnswer(invocation -> {
+        when(llmClient.completeStream(anyList(), anyList(), any())).thenAnswer(invocation -> {
             @SuppressWarnings("unchecked")
-            Consumer<String> onDelta = invocation.getArgument(1);
+            Consumer<String> onDelta = invocation.getArgument(2);
             onDelta.accept("Hel");
             onDelta.accept("lo");
-            return "Hello";
+            return new dev.kualu.llm.AssistantTurn("Hello", java.util.List.of());
         });
 
         String token = login();
@@ -67,7 +67,7 @@ class SseStreamIntegrationTest {
 
     @Test
     void streamEmitsErrorOnFailure() throws Exception {
-        when(llmClient.chatStream(anyList(), any()))
+        when(llmClient.completeStream(anyList(), anyList(), any()))
                 .thenThrow(new dev.kualu.llm.LlmException("upstream boom", 500, "err"));
 
         String token = login();

@@ -1,5 +1,7 @@
 package dev.kualu;
 
+import dev.kualu.llm.AgentTool;
+import dev.kualu.llm.ExecTool;
 import dev.kualu.llm.LlmClient;
 import dev.kualu.llm.MemoryCompressor;
 import org.slf4j.Logger;
@@ -8,6 +10,9 @@ import org.slf4j.LoggerFactory;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.util.List;
 
 public class Main {
 
@@ -35,7 +40,22 @@ public class Main {
         LlmClient client = LlmClient.fromEnvironment();
         MemoryCompressor compressor = memoryCompressor(client);
         BufferedReader in = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
-        new ChatConsole(client, in, System.out, streaming, compressor).run();
+        new ChatConsole(client, in, System.out, streaming, compressor, execTools()).run();
+    }
+
+    /** Builds the tool list from {@code AGENT_EXEC_*}; empty when the exec tool is disabled. */
+    static List<AgentTool> execTools() {
+        if (!Boolean.parseBoolean(envOr("AGENT_EXEC_ENABLED", "true"))) {
+            log.info("exec-tool configured: enabled=false");
+            return List.of();
+        }
+        Duration timeout = Duration.ofSeconds(Long.parseLong(envOr("AGENT_EXEC_TIMEOUT", "60")));
+        int outputLimit = Integer.parseInt(envOr("AGENT_EXEC_OUTPUT_LIMIT", "8000"));
+        String workdir = envOr("AGENT_EXEC_WORKDIR", "");
+        log.info("exec-tool configured: enabled=true, timeout={}s, output-limit={}, workdir={}",
+                timeout.toSeconds(), outputLimit, workdir.isBlank() ? "(inherited)" : workdir);
+        return List.of(new ExecTool(new ExecTool.Config(
+                timeout, outputLimit, workdir.isBlank() ? null : Path.of(workdir))));
     }
 
     /** Builds the compressor from {@code AGENT_MEMORY_*}; returns null when disabled. */

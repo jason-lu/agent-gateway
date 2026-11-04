@@ -45,6 +45,10 @@ Credentials are read from **environment variables first**, then from a `.env` fi
 | Compression threshold | `AGENT_MEMORY_MAX_MESSAGES` | — | `agent.memory.max-messages` (default `20`) |
 | Turns kept verbatim | `AGENT_MEMORY_KEEP_MESSAGES` | — | `agent.memory.keep-messages` (default `8`) |
 | Summary instruction | `AGENT_MEMORY_INSTRUCTION` | — | `agent.memory.instruction` (default: `summarize-instruction.txt`) |
+| Exec tool | `AGENT_EXEC_ENABLED` | — | `agent.tools.exec.enabled` (default `true`) |
+| Exec timeout | `AGENT_EXEC_TIMEOUT` | — | `agent.tools.exec.timeout-seconds` (default `60`) |
+| Exec output limit | `AGENT_EXEC_OUTPUT_LIMIT` | — | `agent.tools.exec.output-limit` (default `8000`) |
+| Exec working dir | `AGENT_EXEC_WORKDIR` | — | `agent.tools.exec.workdir` (default: the process working directory) |
 
 Copy the example file and fill in real values:
 
@@ -117,6 +121,19 @@ Logs (slf4j; `web` uses logback, `cli` prints to stderr via `slf4j-simple`):
 Thresholds are validated at startup: `keep-messages >= 2` and `max-messages > keep-messages + 2`, otherwise the process refuses to start.
 
 Only the exact command names above are intercepted. Everything else is chat input — including absolute paths (`/usr/lib/jvm/jdk-21.0.5+11/bin/java`), fractions (`1/2`), and other text that contains `/`.
+
+## Exec tool
+
+The model can run system commands through the `exec` tool (OpenAI-style function calling). Both the CLI and the web gateway expose it; tool rounds run inside the turn and the tool results feed back to the model automatically.
+
+- **Windows** runs commands through `cmd.exe /c` (the console is switched to UTF-8 code page 65001 for the command); **Linux** and **macOS** use `/bin/sh -c`.
+- The result carries the exit code and the combined stdout/stderr. A command that overruns the timeout (default 60s) is killed — including its child processes — and reported as a timeout.
+- Output is truncated to the configured limit (default 8000 characters) so one command cannot flood the conversation.
+- The optional `workdir` argument runs the command in another directory (default: the process working directory).
+- At most 8 model calls run per user turn. Unknown tool names and failing tools are returned to the model as error text instead of aborting the turn.
+- Disable with `AGENT_EXEC_ENABLED=false` (CLI) or `agent.tools.exec.enabled=false` (web): requests then carry no tools at all.
+
+> **Security note:** the exec tool lets the model run arbitrary commands on the host. Keep the service on localhost and disable the tool when the gateway is reachable by users who should not have shell access.
 
 ## Run the web gateway
 
@@ -354,7 +371,7 @@ module your.app {
 ./gradlew test
 ```
 
-Covers HTTP client, LLM config/`chat`/`chatStream` (including multi-turn message lists, SSE, and error paths), conversation memory, memory compression (layout, incremental summary, cut-point safety, failure handling), console commands, session store isolation, JWT login/security, and REST session/message APIs.
+Covers HTTP client, LLM config/`chat`/`chatStream` (including multi-turn message lists, SSE, and error paths), the function-calling protocol (`tools`, `tool_calls` parsing and streaming), the tool-call loop and the cross-platform exec tool (exit codes, timeout kill, output truncation, working directory), conversation memory, memory compression (layout, incremental summary, cut-point safety, failure handling), console commands, session store isolation, JWT login/security, and REST session/message APIs.
 
 Persistence is covered by integration tests that run a real PostgreSQL via
 [io.zonky.test:embedded-postgres](https://github.com/zonkyio/embedded-postgres) — no Docker required.

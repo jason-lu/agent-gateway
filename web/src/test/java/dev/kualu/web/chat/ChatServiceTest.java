@@ -67,7 +67,7 @@ class ChatServiceTest {
         session.memory().addAssistant("hi");
         session.memory().addTool("tool", "call-1");
 
-        ChatService service = new ChatService(store, emptyProvider(), emptyCompressorProvider(), configuredProperties());
+        ChatService service = new ChatService(store, emptyProvider(), emptyCompressorProvider(), configuredProperties(), List.of());
         var history = service.history(session);
 
         assertEquals(2, history.size());
@@ -80,7 +80,7 @@ class ChatServiceTest {
         InMemorySessionStore store = new InMemorySessionStore();
         Session session = store.create("ada", null);
         ChatService service = new ChatService(
-                store, emptyProvider(), emptyCompressorProvider(), new LlmProperties(null, null, null, 90));
+                store, emptyProvider(), emptyCompressorProvider(), new LlmProperties(null, null, null, 90), List.of());
 
         assertThrows(LlmNotConfiguredException.class, () -> service.chat(session, "hi"));
         assertEquals(0, session.messageCount());
@@ -89,12 +89,12 @@ class ChatServiceTest {
     @Test
     void isLlmConfiguredRequiresPropertiesAndClient() {
         ChatService missingClient = new ChatService(
-                new InMemorySessionStore(), emptyProvider(), emptyCompressorProvider(), configuredProperties());
+                new InMemorySessionStore(), emptyProvider(), emptyCompressorProvider(), configuredProperties(), List.of());
         ChatService missingProps = new ChatService(
                 new InMemorySessionStore(),
                 clientProvider(new LlmClient(new LlmConfig("http://x", "k", "m"))),
                 emptyCompressorProvider(),
-                new LlmProperties(null, null, null, 90));
+                new LlmProperties(null, null, null, 90), List.of());
 
         assertFalse(missingClient.isLlmConfigured());
         assertFalse(missingProps.isLlmConfigured());
@@ -115,7 +115,7 @@ class ChatServiceTest {
                 store,
                 clientProvider(llm),
                 compressorProvider(new MemoryCompressor(llm, 8, 3, null)),
-                configuredProperties());
+                configuredProperties(), List.of());
 
         assertEquals("REPLY", service.chat(session, "new question"));
 
@@ -141,7 +141,7 @@ class ChatServiceTest {
                 store,
                 clientProvider(llm),
                 compressorProvider(new MemoryCompressor(llm, 8, 3, null)),
-                configuredProperties());
+                configuredProperties(), List.of());
 
         assertEquals("REPLY", service.chat(session, "new question"));
 
@@ -163,7 +163,7 @@ class ChatServiceTest {
 
         RecordingLlm llm = new RecordingLlm();
         ChatService service = new ChatService(
-                store, clientProvider(llm), emptyCompressorProvider(), configuredProperties());
+                store, clientProvider(llm), emptyCompressorProvider(), configuredProperties(), List.of());
 
         assertEquals("REPLY", service.chat(session, "new question"));
         assertEquals(before + 2, session.messageCount());
@@ -181,7 +181,7 @@ class ChatServiceTest {
         Session session = store.create("ada", null);
         RecordingLlm llm = new RecordingLlm();
         ChatService service = new ChatService(
-                store, clientProvider(llm), emptyCompressorProvider(), configuredProperties());
+                store, clientProvider(llm), emptyCompressorProvider(), configuredProperties(), List.of());
 
         // The reply is already produced; a failed write must not turn it into an error.
         assertEquals("REPLY", service.chat(session, "new question"));
