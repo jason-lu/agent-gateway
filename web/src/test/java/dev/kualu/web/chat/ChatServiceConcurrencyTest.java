@@ -1,7 +1,7 @@
 package dev.kualu.web.chat;
 
-import dev.kualu.llm.LlmClient;
-import dev.kualu.llm.LlmConfig;
+import dev.kualu.llm.client.LlmClient;
+import dev.kualu.llm.client.LlmConfig;
 import dev.kualu.web.config.LlmProperties;
 import dev.kualu.web.session.InMemorySessionStore;
 import dev.kualu.web.session.Session;
@@ -79,7 +79,7 @@ class ChatServiceConcurrencyTest {
     }
 
     @SuppressWarnings("unchecked")
-    private static org.springframework.beans.factory.ObjectProvider<dev.kualu.llm.MemoryCompressor> emptyCompressorProvider() {
+    private static org.springframework.beans.factory.ObjectProvider<dev.kualu.llm.memory.MemoryCompressor> emptyCompressorProvider() {
         return mock(org.springframework.beans.factory.ObjectProvider.class);
     }
 }

@@ -1,5 +1,10 @@
-package dev.kualu.llm;
+package dev.kualu.llm.memory;
 
+import dev.kualu.llm.ChatMessage;
+import dev.kualu.llm.LlmException;
+import dev.kualu.llm.ToolCall;
+import dev.kualu.llm.client.LlmClient;
+import dev.kualu.llm.client.LlmConfig;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;

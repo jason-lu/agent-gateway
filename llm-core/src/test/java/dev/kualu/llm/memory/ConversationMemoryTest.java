@@ -1,5 +1,7 @@
-package dev.kualu.llm;
+package dev.kualu.llm.memory;
 
+import dev.kualu.llm.ChatMessage;
+import dev.kualu.llm.ToolCall;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;

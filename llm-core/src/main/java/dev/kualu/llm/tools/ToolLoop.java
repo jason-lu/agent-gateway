@@ -1,5 +1,13 @@
-package dev.kualu.llm;
+package dev.kualu.llm.tools;
 
+import dev.kualu.llm.AgentTool;
+import dev.kualu.llm.AssistantTurn;
+import dev.kualu.llm.ChatMessage;
+import dev.kualu.llm.LlmException;
+import dev.kualu.llm.ToolCall;
+import dev.kualu.llm.ToolSpec;
+import dev.kualu.llm.client.LlmClient;
+import dev.kualu.llm.memory.ConversationMemory;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;

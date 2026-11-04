@@ -5,4 +5,7 @@ module dev.kualu.agent {
 
     exports dev.kualu.http;
     exports dev.kualu.llm;
+    exports dev.kualu.llm.client;
+    exports dev.kualu.llm.memory;
+    exports dev.kualu.llm.tools;
 }

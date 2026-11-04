@@ -1,7 +1,7 @@
 package dev.kualu.web.session;
 
 import dev.kualu.llm.ChatMessage;
-import dev.kualu.llm.ConversationMemory;
+import dev.kualu.llm.memory.ConversationMemory;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.sql.ResultSet;

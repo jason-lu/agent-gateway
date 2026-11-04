@@ -2,7 +2,7 @@ package dev.kualu.web.session;
 
 import tools.jackson.databind.ObjectMapper;
 import dev.kualu.llm.ChatMessage;
-import dev.kualu.llm.ConversationMemory;
+import dev.kualu.llm.memory.ConversationMemory;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.jdbc.core.JdbcTemplate;

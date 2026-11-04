@@ -1,4 +1,4 @@
-package dev.kualu.llm;
+package dev.kualu.llm.client;
 
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;

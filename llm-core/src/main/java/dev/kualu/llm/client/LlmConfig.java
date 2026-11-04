@@ -1,5 +1,6 @@
-package dev.kualu.llm;
+package dev.kualu.llm.client;
 
+import dev.kualu.llm.LlmException;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;

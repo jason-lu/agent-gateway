@@ -1,9 +1,9 @@
 package dev.kualu;
 
 import dev.kualu.llm.AgentTool;
-import dev.kualu.llm.ExecTool;
-import dev.kualu.llm.LlmClient;
-import dev.kualu.llm.MemoryCompressor;
+import dev.kualu.llm.tools.ExecTool;
+import dev.kualu.llm.client.LlmClient;
+import dev.kualu.llm.memory.MemoryCompressor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

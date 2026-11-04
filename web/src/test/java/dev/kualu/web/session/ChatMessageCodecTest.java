@@ -2,7 +2,7 @@ package dev.kualu.web.session;
 
 import tools.jackson.databind.ObjectMapper;
 import dev.kualu.llm.ChatMessage;
-import dev.kualu.llm.MemoryCompressor;
+import dev.kualu.llm.memory.MemoryCompressor;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;

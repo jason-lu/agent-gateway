@@ -1,9 +1,14 @@
-package dev.kualu.llm;
+package dev.kualu.llm.client;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import dev.kualu.http.HttpClient;
+import dev.kualu.llm.AssistantTurn;
+import dev.kualu.llm.ChatMessage;
+import dev.kualu.llm.LlmException;
+import dev.kualu.llm.ToolCall;
+import dev.kualu.llm.ToolSpec;
 
 import java.net.http.HttpResponse;
 import java.time.Duration;

@@ -256,7 +256,7 @@ curl -N "http://127.0.0.1:8080/api/v1/sessions/$SID/messages/stream" \
 ### LLM client
 
 ```java
-import dev.kualu.llm.LlmClient;
+import dev.kualu.llm.client.LlmClient;
 
 LlmClient client = LlmClient.fromEnvironment();
 
@@ -276,8 +276,8 @@ Multi-turn memory — send the full conversation so the model sees prior context
 
 ```java
 import dev.kualu.llm.ChatMessage;
-import dev.kualu.llm.ConversationMemory;
-import dev.kualu.llm.LlmClient;
+import dev.kualu.llm.memory.ConversationMemory;
+import dev.kualu.llm.client.LlmClient;
 
 LlmClient client = LlmClient.fromEnvironment();
 ConversationMemory memory = new ConversationMemory()
@@ -316,7 +316,7 @@ memory.addTool("file1\nfile2", "call_abc");
 To keep the payload bounded over a long session, wrap the memory with `MemoryCompressor` (see [Memory compression](#memory-compression)):
 
 ```java
-import dev.kualu.llm.MemoryCompressor;
+import dev.kualu.llm.memory.MemoryCompressor;
 
 MemoryCompressor compressor = new MemoryCompressor(client, 20, 8, null);
 // before each request:

@@ -2,12 +2,12 @@ package dev.kualu;
 
 import dev.kualu.llm.AgentTool;
 import dev.kualu.llm.ChatMessage;
-import dev.kualu.llm.ConversationMemory;
-import dev.kualu.llm.LlmClient;
+import dev.kualu.llm.memory.ConversationMemory;
+import dev.kualu.llm.client.LlmClient;
 import dev.kualu.llm.LlmException;
-import dev.kualu.llm.MemoryCompressor;
+import dev.kualu.llm.memory.MemoryCompressor;
 import dev.kualu.llm.ToolCall;
-import dev.kualu.llm.ToolLoop;
+import dev.kualu.llm.tools.ToolLoop;
 
 import java.io.BufferedReader;
 import java.io.IOException;

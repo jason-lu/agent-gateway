@@ -1,10 +1,11 @@
-package dev.kualu.llm;
+package dev.kualu.llm.tools;
 
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonSyntaxException;
 
+import dev.kualu.llm.AgentTool;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;

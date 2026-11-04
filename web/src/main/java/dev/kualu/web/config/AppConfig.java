@@ -1,10 +1,10 @@
 package dev.kualu.web.config;
 
 import tools.jackson.databind.ObjectMapper;
-import dev.kualu.llm.ExecTool;
-import dev.kualu.llm.LlmClient;
-import dev.kualu.llm.LlmConfig;
-import dev.kualu.llm.MemoryCompressor;
+import dev.kualu.llm.tools.ExecTool;
+import dev.kualu.llm.client.LlmClient;
+import dev.kualu.llm.client.LlmConfig;
+import dev.kualu.llm.memory.MemoryCompressor;
 import dev.kualu.web.api.ApiDtos.ErrorResponse;
 import dev.kualu.web.auth.InMemoryRefreshTokenStore;
 import dev.kualu.web.auth.JwtAuthenticationFilter;

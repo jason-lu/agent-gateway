@@ -54,10 +54,10 @@ source: main
 
 这样单次压缩的 LLM 输入与 `keepMessages` 同阶，不随会话总长度增长。
 
-### [S2.2] `MemoryCompressor`（`llm-core`，包 `dev.kualu.llm`）
+### [S2.2] `MemoryCompressor`（`llm-core`，包 `dev.kualu.llm.memory`）
 
 ```java
-package dev.kualu.llm;
+package dev.kualu.llm.memory;
 
 /** Compresses conversation history into an incremental summary. */
 public final class MemoryCompressor {
@@ -193,7 +193,7 @@ synchronized (session.memory()) {
 - `web` 零改动——Spring Boot 自带 logback 绑定。
 - `cli` 增加 `runtimeOnly("org.slf4j:slf4j-simple")`，输出走 stderr，不污染 stdout 的对话内容。
 
-**事件与级别**（logger 名统一 `dev.kualu.llm.MemoryCompressor`）：
+**事件与级别**（logger 名统一 `dev.kualu.llm.memory.MemoryCompressor`）：
 
 | 事件 | 级别 | 示例 |
 |---|---|---|

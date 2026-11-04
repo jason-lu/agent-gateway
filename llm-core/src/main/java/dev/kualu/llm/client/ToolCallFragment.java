@@ -1,4 +1,4 @@
-package dev.kualu.llm;
+package dev.kualu.llm.client;
 
 /**
  * One streamed {@code delta.tool_calls[]} fragment. Later chunks carry only

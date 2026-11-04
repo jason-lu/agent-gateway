@@ -1,9 +1,14 @@
-package dev.kualu.llm;
+package dev.kualu.llm.client;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import dev.kualu.llm.AssistantTurn;
+import dev.kualu.llm.ChatMessage;
+import dev.kualu.llm.LlmException;
+import dev.kualu.llm.ToolCall;
+import dev.kualu.llm.ToolSpec;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

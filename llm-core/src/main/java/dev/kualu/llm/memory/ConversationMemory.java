@@ -1,5 +1,6 @@
-package dev.kualu.llm;
+package dev.kualu.llm.memory;
 
+import dev.kualu.llm.ChatMessage;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;

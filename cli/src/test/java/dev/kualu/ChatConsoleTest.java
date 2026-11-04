@@ -1,8 +1,8 @@
 package dev.kualu;
 
 import dev.kualu.llm.ChatMessage;
-import dev.kualu.llm.LlmClient;
-import dev.kualu.llm.LlmConfig;
+import dev.kualu.llm.client.LlmClient;
+import dev.kualu.llm.client.LlmConfig;
 import dev.kualu.llm.LlmException;
 import org.junit.jupiter.api.Test;
 
@@ -296,7 +296,7 @@ class ChatConsoleTest {
     }
 
     private static String runWith(LlmClient client, String input, boolean streaming,
-                                  dev.kualu.llm.MemoryCompressor compressor) {
+                                  dev.kualu.llm.memory.MemoryCompressor compressor) {
         BufferedReader in = new BufferedReader(
                 new InputStreamReader(new ByteArrayInputStream(input.getBytes(StandardCharsets.UTF_8)),
                         StandardCharsets.UTF_8));
@@ -309,7 +309,7 @@ class ChatConsoleTest {
     @Test
     void longConversation_compressesBeforeBuildingThePayload() {
         CompressingLlm client = new CompressingLlm();
-        dev.kualu.llm.MemoryCompressor compressor = new dev.kualu.llm.MemoryCompressor(client, 6, 2, null);
+        dev.kualu.llm.memory.MemoryCompressor compressor = new dev.kualu.llm.memory.MemoryCompressor(client, 6, 2, null);
 
         StringBuilder input = new StringBuilder();
         for (int i = 0; i < 5; i++) {
@@ -322,14 +322,14 @@ class ChatConsoleTest {
         // The fifth turn already sees a compressed payload.
         List<ChatMessage> lastPayload = client.streamCalls.get(client.streamCalls.size() - 1);
         assertTrue(lastPayload.stream()
-                        .anyMatch(m -> m.content().startsWith(dev.kualu.llm.MemoryCompressor.SUMMARY_PREFIX)),
+                        .anyMatch(m -> m.content().startsWith(dev.kualu.llm.memory.MemoryCompressor.SUMMARY_PREFIX)),
                 "the last payload must already carry the summary");
     }
 
     @Test
     void history_hidesTheCompressionSummary() {
         CompressingLlm client = new CompressingLlm();
-        dev.kualu.llm.MemoryCompressor compressor = new dev.kualu.llm.MemoryCompressor(client, 6, 2, null);
+        dev.kualu.llm.memory.MemoryCompressor compressor = new dev.kualu.llm.memory.MemoryCompressor(client, 6, 2, null);
 
         StringBuilder input = new StringBuilder();
         for (int i = 0; i < 5; i++) {
@@ -338,7 +338,7 @@ class ChatConsoleTest {
         input.append("/history\n/quit\n");
         String output = runWith(client, input.toString(), true, compressor);
 
-        assertFalse(output.contains(dev.kualu.llm.MemoryCompressor.SUMMARY_PREFIX));
+        assertFalse(output.contains(dev.kualu.llm.memory.MemoryCompressor.SUMMARY_PREFIX));
         assertFalse(output.contains("SUMMARY-TEXT"));
     }
 
@@ -353,10 +353,10 @@ class ChatConsoleTest {
             }
         };
 
-        String output = run(client, dev.kualu.llm.MemoryCompressor.SUMMARY_PREFIX + "user text\n/history\n/quit\n", true);
+        String output = run(client, dev.kualu.llm.memory.MemoryCompressor.SUMMARY_PREFIX + "user text\n/history\n/quit\n", true);
 
         // Only the summary *system* message is hidden; a user turn with the same
         // prefix is ordinary content and must stay visible.
-        assertTrue(output.contains("[user] " + dev.kualu.llm.MemoryCompressor.SUMMARY_PREFIX + "user text"));
+        assertTrue(output.contains("[user] " + dev.kualu.llm.memory.MemoryCompressor.SUMMARY_PREFIX + "user text"));
     }
 }

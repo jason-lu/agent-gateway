@@ -1,10 +1,10 @@
 package dev.kualu.web.chat;
 
 import dev.kualu.llm.ChatMessage;
-import dev.kualu.llm.LlmClient;
-import dev.kualu.llm.LlmConfig;
+import dev.kualu.llm.client.LlmClient;
+import dev.kualu.llm.client.LlmConfig;
 import dev.kualu.llm.LlmException;
-import dev.kualu.llm.MemoryCompressor;
+import dev.kualu.llm.memory.MemoryCompressor;
 import dev.kualu.web.config.LlmProperties;
 import dev.kualu.web.session.InMemorySessionStore;
 import dev.kualu.web.session.Session;

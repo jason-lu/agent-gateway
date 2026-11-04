@@ -1,6 +1,6 @@
 package dev.kualu.web.session;
 
-import dev.kualu.llm.ConversationMemory;
+import dev.kualu.llm.memory.ConversationMemory;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;

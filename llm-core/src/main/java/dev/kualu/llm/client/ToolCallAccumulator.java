@@ -1,5 +1,7 @@
-package dev.kualu.llm;
+package dev.kualu.llm.client;
 
+import dev.kualu.llm.LlmException;
+import dev.kualu.llm.ToolCall;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;

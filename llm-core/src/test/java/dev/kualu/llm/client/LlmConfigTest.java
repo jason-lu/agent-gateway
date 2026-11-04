@@ -1,5 +1,6 @@
-package dev.kualu.llm;
+package dev.kualu.llm.client;
 
+import dev.kualu.llm.LlmException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 

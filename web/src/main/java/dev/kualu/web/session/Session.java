@@ -1,6 +1,6 @@
 package dev.kualu.web.session;
 
-import dev.kualu.llm.ConversationMemory;
+import dev.kualu.llm.memory.ConversationMemory;
 
 import java.time.Instant;
 import java.util.Objects;

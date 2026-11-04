@@ -1,6 +1,6 @@
 package dev.kualu.web.session;
 
-import dev.kualu.llm.ConversationMemory;
+import dev.kualu.llm.memory.ConversationMemory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
