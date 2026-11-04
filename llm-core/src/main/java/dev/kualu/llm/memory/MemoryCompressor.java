@@ -18,7 +18,11 @@ import java.util.Objects;
  * Compresses conversation history into an incremental summary so the request
  * payload stays bounded as a conversation grows.
  *
- * <p>Layout after compression: {@code [system 原提示][摘要 system][最近的原文轮次]}.
+ * <p>Folding is non-destructive: every raw turn stays in
+ * {@link ConversationMemory#messages()} (visible history and persistence);
+ * only the summary marker moves forward to the fold point. The bounded view
+ * actually sent to the model is {@link ConversationMemory#context()}:
+ * {@code [system 原提示][摘要 system][最近的原文轮次]}.
  * The summary message is recognised by the {@link #SUMMARY_PREFIX} marker, not by
  * position. The verbatim tail always starts at a {@code user} turn, so a run is
  * never split and a {@code tool} result is never orphaned.
@@ -60,7 +64,8 @@ public final class MemoryCompressor {
 
     /**
      * @param llm          client used for the summarisation call
-     * @param maxMessages  trigger threshold, counted over every stored message
+     * @param maxMessages  trigger threshold, counted over the context sent to
+     *                     the model (system + summary + verbatim tail)
      * @param keepMessages how many recent turns survive verbatim after compression
      * @param instruction  summarisation instruction; {@code null} or blank uses
      *                     {@link #DEFAULT_INSTRUCTION}
@@ -84,40 +89,40 @@ public final class MemoryCompressor {
     }
 
     /**
-     * Compresses {@code memory} in place when it exceeds the threshold.
+     * Compresses {@code memory} when the context sent to the model exceeds the
+     * threshold. Older turns are folded into the summary marker at the fold
+     * point; the raw turns themselves stay in {@link ConversationMemory#messages()}.
      *
      * @param context log correlation label ({@code "session=<id>"} on web, {@code "cli"}
      *                on the console); {@code null} drops the bracketed prefix
-     * @return {@code true} when history was compressed
+     * @return {@code true} when the summary was updated
      */
     public boolean maybeCompress(ConversationMemory memory, String context) {
         Objects.requireNonNull(memory, "memory");
         List<ChatMessage> all = memory.messages();
         String prefix = logPrefix(context);
 
-        if (all.size() <= maxMessages) {
+        int systemIndex = !all.isEmpty() && isSystem(all.get(0)) && !isSummary(all.get(0)) ? 0 : -1;
+        int summaryIndex = -1;
+        for (int i = all.size() - 1; i >= 0; i--) {
+            if (isSummary(all.get(i))) {
+                summaryIndex = i;
+                break;
+            }
+        }
+        List<ChatMessage> tail = all.subList(summaryIndex >= 0 ? summaryIndex + 1 : systemIndex + 1, all.size());
+
+        int contextSize = (systemIndex >= 0 ? 1 : 0) + (summaryIndex >= 0 ? 1 : 0) + tail.size();
+        if (contextSize <= maxMessages) {
             return false;
         }
 
-        int systemIndex = -1;
-        int summaryIndex = -1;
-        int cursor = 0;
-        if (cursor < all.size() && isSystem(all.get(cursor)) && !isSummary(all.get(cursor))) {
-            systemIndex = cursor++;
-        }
-        if (cursor < all.size() && isSummary(all.get(cursor))) {
-            summaryIndex = cursor++;
-        }
-        int turnsStart = cursor;
-
-        List<ChatMessage> turns = all.subList(turnsStart, all.size());
-
-        int tailStartInTurns = turns.size() - keepMessages;
-        while (tailStartInTurns > 0 && !"user".equals(turns.get(tailStartInTurns).role())) {
+        int tailStartInTurns = tail.size() - keepMessages;
+        while (tailStartInTurns > 0 && !"user".equals(tail.get(tailStartInTurns).role())) {
             tailStartInTurns--;
         }
         if (tailStartInTurns <= 0) {
-            boolean startsAtUser = !turns.isEmpty() && "user".equals(turns.get(0).role());
+            boolean startsAtUser = !tail.isEmpty() && "user".equals(tail.get(0).role());
             log.debug("{} skipped: {} (size {})", prefix,
                     startsAtUser ? "nothing older to fold" : "no user-turn cut point", all.size());
             return false;
@@ -126,8 +131,13 @@ public final class MemoryCompressor {
         String previousSummary = summaryIndex >= 0
                 ? all.get(summaryIndex).content().substring(SUMMARY_PREFIX.length())
                 : null;
-        List<ChatMessage> dropped = List.copyOf(turns.subList(0, tailStartInTurns));
-        List<ChatMessage> tail = List.copyOf(turns.subList(tailStartInTurns, turns.size()));
+        // Raw turns already folded by an earlier compression; they stay in the
+        // history but are only represented by previousSummary in the new summary.
+        List<ChatMessage> folded = summaryIndex >= 0
+                ? List.copyOf(all.subList(systemIndex + 1, summaryIndex))
+                : List.of();
+        List<ChatMessage> dropped = List.copyOf(tail.subList(0, tailStartInTurns));
+        List<ChatMessage> kept = List.copyOf(tail.subList(tailStartInTurns, tail.size()));
 
         long startedAt = System.nanoTime();
         String summaryBody;
@@ -149,16 +159,19 @@ public final class MemoryCompressor {
             return false;
         }
 
-        List<ChatMessage> rebuilt = new ArrayList<>(2 + tail.size());
+        List<ChatMessage> rebuilt = new ArrayList<>(all.size() + 1);
         if (systemIndex >= 0) {
             rebuilt.add(all.get(systemIndex));
         }
+        rebuilt.addAll(folded);
+        rebuilt.addAll(dropped);
         rebuilt.add(buildSummaryMessage(summaryBody));
-        rebuilt.addAll(tail);
+        rebuilt.addAll(kept);
         memory.replaceAll(rebuilt);
 
-        log.info("{}: size {} -> {} (dropped {}, summary {} chars, {} ms)",
-                prefix, all.size(), rebuilt.size(), dropped.size(), summaryBody.length(), elapsedMs);
+        log.info("{}: context {} -> {} (folded {} turns, summary {} chars, {} ms)",
+                prefix, contextSize, (systemIndex >= 0 ? 1 : 0) + 1 + kept.size(),
+                dropped.size(), summaryBody.length(), elapsedMs);
         return true;
     }
 

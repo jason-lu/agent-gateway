@@ -100,10 +100,11 @@ The console keeps multi-turn memory in session: each message is sent with prior 
 
 By default the full history is sent with every request, so long conversations grow without bound. Enable compression (on by default) to keep the payload bounded:
 
-- When the history passes `max-messages` (default 20), the oldest turns are folded into a single summary message.
+- Compression only shrinks the context sent to the model — the stored history keeps every turn, so `/history` and `GET /api/v1/sessions/{id}/messages` still show the whole conversation.
+- When the context passes `max-messages` (default 20), the oldest turns are folded into a single summary message.
 - The most recent `keep-messages` turns (default 8) always stay verbatim; the cut never splits a turn and never orphans a tool result.
 - The summary is regenerated incrementally — the previous summary plus the turns that just aged out — so the cost does not grow with the conversation.
-- Layout: `[system prompt][summary][recent turns]`. The summary carries the `【历史对话摘要】` marker and is hidden from `/history` and from `GET /api/v1/sessions/{id}/messages`.
+- Request layout: `[system prompt][summary][recent turns]`. The summary carries the `【历史对话摘要】` marker and is hidden from `/history` and from `GET /api/v1/sessions/{id}/messages`.
 - Compression runs before the request is built, so the current turn already sees the bounded payload. If the summarisation call fails the history is left untouched and the turn proceeds normally.
 
 The summarisation prompt lives in its own file so it can be tuned without touching code:
@@ -113,7 +114,7 @@ Logs (slf4j; `web` uses logback, `cli` prints to stderr via `slf4j-simple`):
 
 | Event | Level |
 |---|---|
-| Compression succeeded (`size 24 -> 12 (dropped 14, …)`) | `INFO` |
+| Compression succeeded (`context 24 -> 6 (folded 14 turns, …)`) | `INFO` |
 | Summarisation failed, history unchanged | `WARN` |
 | Skipped (no legal cut point) | `DEBUG` |
 | Thresholds loaded at startup | `INFO` |

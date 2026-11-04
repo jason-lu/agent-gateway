@@ -9,8 +9,10 @@ import java.util.Objects;
 /**
  * In-memory conversation history for multi-turn chat.
  *
- * <p>Stores prior system/user/assistant turns and produces the full
- * {@code messages} list to send with the next request.
+ * <p>Stores every system/user/assistant turn. {@link #messages()} is the full
+ * history (what the user sees and what is persisted); {@link #context()} is the
+ * bounded view sent to the model, where turns folded into the compression
+ * summary are replaced by that summary.
  */
 public final class ConversationMemory {
 
@@ -44,25 +46,61 @@ public final class ConversationMemory {
     }
 
     /**
-     * Returns the stored history plus a new user message, without mutating this memory.
-     * Use this to build the request payload, then {@link #addUser} / {@link #addAssistant}
-     * only after the LLM call succeeds.
+     * Returns the request payload for the next turn — the {@link #context()}
+     * view plus a new user message — without mutating this memory. Commit the
+     * turn with {@link #addUser} / {@link #addAssistant} only after the LLM
+     * call succeeds.
      */
     public List<ChatMessage> withUser(String content) {
-        List<ChatMessage> next = new ArrayList<>(history.size() + 1);
-        next.addAll(history);
+        List<ChatMessage> next = new ArrayList<>(context());
         next.add(ChatMessage.user(content));
         return Collections.unmodifiableList(next);
     }
 
-    /** Immutable view of the stored turns. */
+    /** Immutable view of the stored turns: the full history, including folded turns. */
     public List<ChatMessage> messages() {
         return Collections.unmodifiableList(List.copyOf(history));
     }
 
     /**
-     * Replaces the stored turns wholesale (defensive copy). Used by memory
-     * compression to fold older turns into a summary message.
+     * The bounded request-payload view: the leading system prompt, the
+     * compression summary (if any), and the turns after the fold point. Turns
+     * folded into the summary stay in {@link #messages()} but are not sent to
+     * the model.
+     */
+    public List<ChatMessage> context() {
+        int fold = -1;
+        for (int i = history.size() - 1; i >= 0; i--) {
+            if (isSummary(history.get(i))) {
+                fold = i;
+                break;
+            }
+        }
+        if (fold < 0) {
+            return messages();
+        }
+        List<ChatMessage> next = new ArrayList<>(history.size() - fold + 1);
+        if (fold > 0 && isPlainSystem(history.get(0))) {
+            next.add(history.get(0));
+        }
+        next.add(history.get(fold));
+        next.addAll(history.subList(fold + 1, history.size()));
+        return Collections.unmodifiableList(next);
+    }
+
+    private static boolean isSummary(ChatMessage message) {
+        return "system".equals(message.role())
+                && message.content().startsWith(MemoryCompressor.SUMMARY_PREFIX);
+    }
+
+    private static boolean isPlainSystem(ChatMessage message) {
+        return "system".equals(message.role()) && !isSummary(message);
+    }
+
+    /**
+     * Replaces the stored turns wholesale (defensive copy). Used by the tool
+     * loop to commit a turn, by memory compression to move the fold marker,
+     * and by session stores to restore a conversation.
      */
     public ConversationMemory replaceAll(List<ChatMessage> newHistory) {
         List<ChatMessage> copy = List.copyOf(newHistory);

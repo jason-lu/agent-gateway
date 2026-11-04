@@ -71,19 +71,49 @@ class MemoryCompressorTest {
 
         assertTrue(compressor.maybeCompress(memory, "test"));
 
+        // Every raw turn survives in the stored history; the summary marker sits
+        // at the fold point.
         List<ChatMessage> after = memory.messages();
+        assertEquals(12, after.size());
         assertEquals("system", after.get(0).role());
         assertEquals("be brief", after.get(0).content());
-        assertEquals("system", after.get(1).role());
-        assertTrue(after.get(1).content().startsWith(MemoryCompressor.SUMMARY_PREFIX));
-        assertTrue(after.get(1).content().contains("SUMMARY"));
+        assertEquals("u0", after.get(1).content());
+        assertEquals("a2", after.get(6).content());
+        assertEquals("system", after.get(7).role());
+        assertTrue(after.get(7).content().startsWith(MemoryCompressor.SUMMARY_PREFIX));
+        assertTrue(after.get(7).content().contains("SUMMARY"));
+        assertEquals("u3", after.get(8).content());
+
+        // The model context only carries the summary and the verbatim tail.
         // keepMessages=3 would start the tail at a3; that is not a user turn, so it
         // rolls back to u3 and the tail is the last four turns.
-        assertEquals(6, after.size());
-        assertEquals("u3", after.get(2).content());
-        assertEquals("a3", after.get(3).content());
-        assertEquals("u4", after.get(4).content());
-        assertEquals("a4", after.get(5).content());
+        List<ChatMessage> context = memory.context();
+        assertEquals(6, context.size());
+        assertEquals("system", context.get(0).role());
+        assertEquals("be brief", context.get(0).content());
+        assertEquals("system", context.get(1).role());
+        assertTrue(context.get(1).content().startsWith(MemoryCompressor.SUMMARY_PREFIX));
+        assertEquals("u3", context.get(2).content());
+        assertEquals("a3", context.get(3).content());
+        assertEquals("u4", context.get(4).content());
+        assertEquals("a4", context.get(5).content());
+    }
+
+    @Test
+    void compression_keepsEveryRawTurnInHistory_onlyContextShrinks() {
+        StubLlm llm = new StubLlm();
+        MemoryCompressor compressor = new MemoryCompressor(llm, 8, 3, null);
+        ConversationMemory memory = conversation(5, "be brief");
+
+        assertTrue(compressor.maybeCompress(memory, "test"));
+
+        List<String> contents = memory.messages().stream().map(ChatMessage::content).toList();
+        for (int i = 0; i < 5; i++) {
+            assertTrue(contents.contains("u" + i), "user turn u" + i + " must survive in the history");
+            assertTrue(contents.contains("a" + i), "assistant turn a" + i + " must survive in the history");
+        }
+        assertTrue(memory.context().size() < memory.messages().size(),
+                "only the model context is compressed");
     }
 
     @Test
@@ -98,17 +128,18 @@ class MemoryCompressorTest {
     }
 
     @Test
-    void withoutSystemPrompt_summaryIsFirst() {
+    void withoutSystemPrompt_summaryIsFirstInContext() {
         StubLlm llm = new StubLlm();
         MemoryCompressor compressor = new MemoryCompressor(llm, 6, 2, null);
         ConversationMemory memory = conversation(4, null);
 
         assertTrue(compressor.maybeCompress(memory, "test"));
 
-        List<ChatMessage> after = memory.messages();
-        assertEquals("system", after.get(0).role());
-        assertTrue(after.get(0).content().startsWith(MemoryCompressor.SUMMARY_PREFIX));
-        assertEquals("u3", after.get(1).content());
+        List<ChatMessage> context = memory.context();
+        assertEquals("system", context.get(0).role());
+        assertTrue(context.get(0).content().startsWith(MemoryCompressor.SUMMARY_PREFIX));
+        assertEquals("u3", context.get(1).content());
+        assertEquals("u0", memory.messages().get(0).content());
     }
 
     @Test
@@ -127,14 +158,16 @@ class MemoryCompressorTest {
 
         assertTrue(compressor.maybeCompress(memory, "test"));
 
-        List<ChatMessage> after = memory.messages();
+        List<ChatMessage> context = memory.context();
         // keepMessages=3 nominally starts the tail at t2 (index 5); that is not a user
         // turn, so the cut rolls back to u2 and no tool result is orphaned.
-        assertEquals("u2", after.get(1).content());
-        assertEquals("tool", after.get(2).role());
-        assertEquals("t2", after.get(2).content());
-        assertEquals("u3", after.get(3).content());
-        assertEquals("call_3", after.get(4).toolCallId());
+        assertEquals("system", context.get(0).role());
+        assertEquals("u2", context.get(1).content());
+        assertEquals("tool", context.get(2).role());
+        assertEquals("t2", context.get(2).content());
+        assertEquals("u3", context.get(3).content());
+        assertEquals("call_3", context.get(4).toolCallId());
+        assertEquals("u0", memory.messages().get(0).content());
     }
 
     @Test
@@ -177,8 +210,19 @@ class MemoryCompressorTest {
         assertTrue(secondPayload.contains("u2") && secondPayload.contains("a3"), "aged-out turns must be passed on");
         assertFalse(secondPayload.contains("u0"), "turns already folded into the old summary must not reappear");
 
+        // The history keeps every raw turn and carries exactly one summary marker.
+        List<ChatMessage> after = memory.messages();
+        assertEquals(12, after.size());
+        assertEquals("u0", after.get(1).content());
+        assertEquals("a4", after.get(11).content());
+        List<ChatMessage> markers = after.stream()
+                .filter(m -> m.content().startsWith(MemoryCompressor.SUMMARY_PREFIX))
+                .toList();
+        assertEquals(1, markers.size());
         assertEquals("SECOND-SUMMARY",
-                memory.messages().get(1).content().substring(MemoryCompressor.SUMMARY_PREFIX.length()));
+                markers.get(0).content().substring(MemoryCompressor.SUMMARY_PREFIX.length()));
+        assertEquals("SECOND-SUMMARY", memory.context().get(1).content()
+                .substring(MemoryCompressor.SUMMARY_PREFIX.length()));
     }
 
     @Test
@@ -224,6 +268,7 @@ class MemoryCompressorTest {
         assertFalse(payload.contains(MemoryCompressor.SUMMARY_PREFIX + "earlier context"),
                 "the prefix itself is stripped");
         assertEquals("plain system prompt", memory.messages().get(0).content());
+        assertEquals("u0", memory.messages().get(1).content());
     }
 
     @Test
@@ -264,8 +309,9 @@ class MemoryCompressorTest {
 
         // The prompt is read as a previous summary and folded away.
         assertTrue(llm.userPayloads.get(0).contains("user-authored prompt"));
-        assertEquals("SUMMARY", memory.messages().get(0).content()
+        assertEquals("SUMMARY", memory.context().get(0).content()
                 .substring(MemoryCompressor.SUMMARY_PREFIX.length()));
+        assertEquals("u0", memory.messages().get(0).content());
     }
 
     @Test

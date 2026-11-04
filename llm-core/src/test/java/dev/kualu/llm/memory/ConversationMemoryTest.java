@@ -31,6 +31,55 @@ class ConversationMemoryTest {
     }
 
     @Test
+    void context_withoutSummary_isTheFullHistory() {
+        ConversationMemory memory = new ConversationMemory()
+                .addSystem("be brief")
+                .addUser("hi")
+                .addAssistant("hello");
+
+        assertEquals(memory.messages(), memory.context());
+    }
+
+    @Test
+    void context_skipsTurnsFoldedIntoTheSummary() {
+        ConversationMemory memory = new ConversationMemory()
+                .addSystem("be brief")
+                .addUser("old question")
+                .addAssistant("old answer")
+                .addSystem(MemoryCompressor.SUMMARY_PREFIX + "old exchange")
+                .addUser("new question")
+                .addAssistant("new answer");
+
+        List<ChatMessage> context = memory.context();
+        assertEquals(4, context.size());
+        assertEquals("be brief", context.get(0).content());
+        assertTrue(context.get(1).content().startsWith(MemoryCompressor.SUMMARY_PREFIX));
+        assertEquals("new question", context.get(2).content());
+        assertEquals("new answer", context.get(3).content());
+
+        // the folded turns stay in the full history
+        assertEquals(6, memory.messages().size());
+        assertEquals("old question", memory.messages().get(1).content());
+    }
+
+    @Test
+    void withUser_buildsOnTheContextView() {
+        ConversationMemory memory = new ConversationMemory()
+                .addUser("old question")
+                .addAssistant("old answer")
+                .addSystem(MemoryCompressor.SUMMARY_PREFIX + "old exchange")
+                .addUser("new question")
+                .addAssistant("new answer");
+
+        List<ChatMessage> payload = memory.withUser("next");
+        assertEquals(4, payload.size());
+        assertTrue(payload.get(0).content().startsWith(MemoryCompressor.SUMMARY_PREFIX));
+        assertEquals("new question", payload.get(1).content());
+        assertEquals("new answer", payload.get(2).content());
+        assertEquals("next", payload.get(3).content());
+    }
+
+    @Test
     void addUserAndAssistant_accumulateInOrder() {
         ConversationMemory memory = new ConversationMemory();
         memory.addUser("a");

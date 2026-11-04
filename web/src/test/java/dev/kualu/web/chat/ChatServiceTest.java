@@ -124,6 +124,14 @@ class ChatServiceTest {
                 "payload must already carry the summary, i.e. compression ran first");
         assertEquals("new question", payload.get(payload.size() - 1).content());
         assertTrue(payload.size() < uncompressedSize + 1, "payload must be smaller than the uncompressed history");
+
+        // The visible history keeps every turn; only the payload was compressed.
+        assertTrue(session.memory().messages().stream().anyMatch(m -> "u0".equals(m.content())),
+                "folded turns must stay in the history");
+        assertTrue(session.memory().messages().stream().anyMatch(m -> "a9".equals(m.content())),
+                "folded turns must stay in the history");
+        assertEquals(22, service.history(session).size(),
+                "history must show every user/assistant turn, folded or not");
     }
 
     @Test

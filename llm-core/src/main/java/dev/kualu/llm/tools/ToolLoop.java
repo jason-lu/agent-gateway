@@ -80,7 +80,7 @@ public final class ToolLoop {
         Objects.requireNonNull(memory, "memory");
         Objects.requireNonNull(userContent, "userContent");
 
-        List<ChatMessage> payload = new ArrayList<>(memory.messages());
+        List<ChatMessage> payload = new ArrayList<>(memory.context());
         payload.add(ChatMessage.user(userContent));
         List<ChatMessage> turns = new ArrayList<>();
         StringBuilder reply = new StringBuilder();
