@@ -104,7 +104,8 @@ public final class LlmConfig {
         return value;
     }
 
-    static Map<String, String> loadDotEnv(Path file) {
+    /** Parses a dotenv file; absent file yields an empty map. Process env should win over these values. */
+    public static Map<String, String> loadDotEnv(Path file) {
         Map<String, String> values = new LinkedHashMap<>();
         if (file == null || !Files.isRegularFile(file)) {
             return values;

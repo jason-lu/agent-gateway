@@ -50,6 +50,12 @@ public class ChatConsole {
     /** @param tools tools the model may call (e.g. {@code ExecTool}); empty disables tool calling */
     public ChatConsole(LlmClient client, BufferedReader in, PrintStream out, boolean streaming,
                        MemoryCompressor compressor, List<AgentTool> tools) {
+        this(client, in, out, streaming, compressor, () -> tools);
+    }
+
+    /** @param tools supplies the tool list once per turn (e.g. dynamic MCP tools) */
+    public ChatConsole(LlmClient client, BufferedReader in, PrintStream out, boolean streaming,
+                       MemoryCompressor compressor, java.util.function.Supplier<List<AgentTool>> tools) {
         this.client = Objects.requireNonNull(client, "client");
         this.in = Objects.requireNonNull(in, "in");
         this.out = Objects.requireNonNull(out, "out");

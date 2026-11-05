@@ -12,6 +12,13 @@ application {
     mainClass = "dev.kualu.Main"
 }
 
+// Run from the Gradle root so `.env` and `mcp.json` resolve where the README says
+// they live ("project root"); wire stdin so the console works from a terminal.
+tasks.named<JavaExec>("run") {
+    workingDir = rootProject.projectDir
+    standardInput = System.`in`
+}
+
 dependencies {
     implementation(project(":llm-core"))
     implementation("org.slf4j:slf4j-api:2.0.17")

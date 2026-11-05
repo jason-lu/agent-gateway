@@ -40,7 +40,7 @@ class ChatServiceStreamTest {
                 store,
                 provider(client),
                 emptyCompressorProvider(),
-                new LlmProperties("http://localhost", "key", "model", 90), List.of());
+                new LlmProperties("http://localhost", "key", "model", 90), List.of(), emptyMcpProvider());
 
         List<String> deltas = new ArrayList<>();
         String reply = service.chatStream(session, "hi", deltas::add);
@@ -62,7 +62,7 @@ class ChatServiceStreamTest {
                 store,
                 provider(client),
                 emptyCompressorProvider(),
-                new LlmProperties("http://localhost", "key", "model", 90), List.of());
+                new LlmProperties("http://localhost", "key", "model", 90), List.of(), emptyMcpProvider());
 
         try {
             service.chat(session, "hi");
@@ -89,7 +89,7 @@ class ChatServiceStreamTest {
                 store,
                 provider(client),
                 emptyCompressorProvider(),
-                new LlmProperties("http://localhost", "key", "model", 90), List.of());
+                new LlmProperties("http://localhost", "key", "model", 90), List.of(), emptyMcpProvider());
 
         List<String> deltas = new ArrayList<>();
         IllegalStateException thrown = assertThrows(
@@ -120,6 +120,11 @@ class ChatServiceStreamTest {
 
     @SuppressWarnings("unchecked")
     private static org.springframework.beans.factory.ObjectProvider<dev.kualu.llm.memory.MemoryCompressor> emptyCompressorProvider() {
+        return mock(org.springframework.beans.factory.ObjectProvider.class);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static org.springframework.beans.factory.ObjectProvider<dev.kualu.mcp.McpConnectionManager> emptyMcpProvider() {
         return mock(org.springframework.beans.factory.ObjectProvider.class);
     }
 }

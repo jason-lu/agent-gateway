@@ -5,6 +5,9 @@ import dev.kualu.llm.tools.ExecTool;
 import dev.kualu.llm.client.LlmClient;
 import dev.kualu.llm.client.LlmConfig;
 import dev.kualu.llm.memory.MemoryCompressor;
+import dev.kualu.mcp.McpConnectionManager;
+import dev.kualu.mcp.McpServerConfig;
+import dev.kualu.mcp.config.McpJsonConfig;
 import dev.kualu.web.api.ApiDtos.ErrorResponse;
 import dev.kualu.web.auth.InMemoryRefreshTokenStore;
 import dev.kualu.web.auth.JwtAuthenticationFilter;
@@ -13,8 +16,13 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -154,6 +162,68 @@ public class AppConfig {
                 Duration.ofSeconds(properties.timeoutSeconds()),
                 properties.outputLimit(),
                 workdir == null ? null : Path.of(workdir)));
+    }
+
+    /**
+     * MCP client: server list comes from {@code mcp.json} (primary) plus the inline
+     * {@code agent.tools.mcp.servers} override layer. Started with the context,
+     * closed with it.
+     */
+    @Bean(initMethod = "start", destroyMethod = "close")
+    @ConditionalOnProperty(name = "agent.tools.mcp.enabled", havingValue = "true", matchIfMissing = true)
+    public McpConnectionManager mcpConnectionManager(
+            McpProperties properties, ObjectProvider<dev.kualu.web.auth.PostgresTokenStore> tokenStores) {
+        Map<String, McpServerConfig> servers = new LinkedHashMap<>();
+        Path configPath = Path.of(properties.config());
+        if (java.nio.file.Files.exists(configPath)) {
+            for (McpServerConfig server : McpJsonConfig.load(configPath)) {
+                servers.put(server.name(), server);
+            }
+            log.info("mcp configured: {} server(s) from {}", servers.size(), configPath);
+        } else {
+            log.info("mcp configured: no config file at {}", configPath);
+        }
+        for (McpProperties.Server inline : properties.servers()) {
+            McpServerConfig server = inlineServer(inline);
+            servers.put(server.name(), server);
+        }
+        return new McpConnectionManager(
+                List.copyOf(servers.values()),
+                McpConnectionManager.DEFAULT_HANDSHAKE_TIMEOUT,
+                Duration.ofSeconds(properties.defaultTimeoutSeconds()),
+                properties.outputLimit(),
+                Duration.ofSeconds(properties.refreshSeconds()),
+                null,
+                tokenStores.getIfAvailable());
+    }
+
+    /** Inline yml entry; values are already placeholder-resolved by Spring. */
+    private static McpServerConfig inlineServer(McpProperties.Server inline) {
+        if (inline.name() == null || inline.name().isBlank()) {
+            throw new IllegalArgumentException("agent.tools.mcp.servers entries need a name");
+        }
+        McpServerConfig.AuthMode authMode = switch (inline.auth() == null ? "" : inline.auth().toLowerCase()) {
+            case "headers" -> McpServerConfig.AuthMode.HEADERS;
+            case "oauth" -> McpServerConfig.AuthMode.OAUTH;
+            case "" -> null;
+            default -> throw new IllegalArgumentException("unknown auth mode: " + inline.auth());
+        };
+        McpServerConfig config;
+        if (inline.url() != null && !inline.url().isBlank() && inline.command() == null) {
+            config = McpServerConfig.http(inline.name(), inline.url(), inline.headers());
+        } else if (inline.command() != null && !inline.command().isBlank()) {
+            List<String> argv = new ArrayList<>();
+            argv.add(inline.command());
+            argv.addAll(inline.args());
+            config = McpServerConfig.stdio(inline.name(), argv, inline.env());
+        } else {
+            throw new IllegalArgumentException(
+                    "agent.tools.mcp.servers entry '" + inline.name() + "' needs command or url");
+        }
+        if (authMode != null) {
+            config = config.withAuthMode(authMode);
+        }
+        return config.withOAuthClient(inline.clientId(), inline.scopes());
     }
 
     private static AccessDeniedHandler accessDeniedHandler(ObjectMapper objectMapper) {

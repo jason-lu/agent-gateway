@@ -41,6 +41,14 @@ agent:
       timeout-seconds: ${AGENT_EXEC_TIMEOUT:60}
       output-limit: ${AGENT_EXEC_OUTPUT_LIMIT:8000}
       workdir: ${AGENT_EXEC_WORKDIR:}
+    mcp:
+      # MCP client: servers come from mcp.json (primary) plus the inline override list.
+      enabled: ${AGENT_MCP_ENABLED:true}
+      config: ${AGENT_MCP_CONFIG:./mcp.json}
+      default-timeout-seconds: ${AGENT_MCP_TIMEOUT:60}
+      output-limit: ${AGENT_MCP_OUTPUT_LIMIT:8000}
+      refresh-seconds: ${AGENT_MCP_REFRESH:300}
+      servers: []
   security:
     jwt-secret: ${AGENT_JWT_SECRET:}
     jwt-ttl: ${AGENT_JWT_TTL:2h}

@@ -49,6 +49,12 @@ Credentials are read from **environment variables first**, then from a `.env` fi
 | Exec timeout | `AGENT_EXEC_TIMEOUT` | — | `agent.tools.exec.timeout-seconds` (default `60`) |
 | Exec output limit | `AGENT_EXEC_OUTPUT_LIMIT` | — | `agent.tools.exec.output-limit` (default `8000`) |
 | Exec working dir | `AGENT_EXEC_WORKDIR` | — | `agent.tools.exec.workdir` (default: the process working directory) |
+| MCP client | `AGENT_MCP_ENABLED` | — | `agent.tools.mcp.enabled` (default `true`) |
+| MCP config file | `AGENT_MCP_CONFIG` | — | `agent.tools.mcp.config` (default `./mcp.json`) |
+| MCP call timeout | `AGENT_MCP_TIMEOUT` | — | `agent.tools.mcp.default-timeout-seconds` (default `60`) |
+| MCP output limit | `AGENT_MCP_OUTPUT_LIMIT` | — | `agent.tools.mcp.output-limit` (default `8000`) |
+| MCP tool refresh | `AGENT_MCP_REFRESH` | — | `agent.tools.mcp.refresh-seconds` (default `300`, `0` disables) |
+| HTTP proxy | `AGENT_HTTP_PROXY` | — | env only; e.g. `127.0.0.1:7890` — all outbound HTTP (LLM, MCP, OAuth) goes through it |
 
 Copy the example file and fill in real values:
 
@@ -135,6 +141,42 @@ The model can run system commands through the `exec` tool (OpenAI-style function
 - Disable with `AGENT_EXEC_ENABLED=false` (CLI) or `agent.tools.exec.enabled=false` (web): requests then carry no tools at all.
 
 > **Security note:** the exec tool lets the model run arbitrary commands on the host. Keep the service on localhost and disable the tool when the gateway is reachable by users who should not have shell access.
+
+## MCP tools
+
+The model can also call tools from [MCP](https://modelcontextprotocol.io) servers — local stdio processes (like `docker run -i --rm ghcr.io/github/github-mcp-server`) and remote Streamable HTTP endpoints (like the hosted GitHub MCP server at `https://api.githubcopilot.com/mcp/`).
+
+The primary configuration is the ecosystem-standard **`mcp.json`** (Claude Desktop / VS Code shape), read from `./mcp.json` by default (`AGENT_MCP_CONFIG` changes the path):
+
+```json
+{
+  "mcpServers": {
+    "github": {
+      "type": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": { "Authorization": "Bearer ${GITHUB_PAT}" }
+    },
+    "playwright": {
+      "command": "npx",
+      "args": ["@playwright/mcp@latest"],
+      "env": { "PLAYWRIGHT_BROWSER": "chromium" }
+    }
+  }
+}
+```
+
+- The top-level key may be `mcpServers` or `servers`; entries with `command` are stdio, entries with `type: "http"` (or `url`) are remote. The legacy `type: "sse"` transport is rejected at load time.
+- Strings support `${ENV}` placeholders (read from the process environment or the project `.env`; and VS Code-style `${input:id}`, read from `INPUT_ID`); an unresolved placeholder fails startup instead of leaking the template to the wire.
+- The web gateway additionally accepts inline `agent.tools.mcp.servers` entries in `application.yml` as a deployment-level override layer (same-named entries win over `mcp.json`).
+
+**Authentication for remote servers** (both are supported):
+
+- **Static headers** — any `headers` map (e.g. a GitHub PAT as `Authorization: Bearer …`). This is the `mcp.json` shape used by VS Code for token-based access.
+- **OAuth** — servers without headers (or `auth: "oauth"`) log in interactively: the system browser opens for an authorization-code + PKCE flow with a loopback redirect (`http://127.0.0.1:<port>/callback`), with the device-code grant as fallback on headless hosts. Refresh tokens are persisted (`<user.home>/.personal-assistant/mcp-tokens.json` by default, `agent.mcp_tokens` when `agent.store=postgres`), so a restart does not need a fresh login. A pre-registered client id can be supplied by the operator; otherwise dynamic client registration (RFC 7591) is used.
+
+Tools are discovered at startup and refreshed on `notifications/tools/list_changed` and periodically; a dropped connection is retried with capped exponential backoff. Each tool is exposed to the model as `mcp_<server>_<tool>` (the original name is used when calling the server). Tool results are truncated to the output limit and failures come back to the model as `error: …` text instead of aborting the turn.
+
+> **Security note:** MCP servers are third-party code. A stdio server runs as a **local child process** (same trust level as the exec tool) and a remote server receives **your credentials** — configure only servers you trust. Remote URLs are forced to HTTPS (loopback excepted) so tokens never cross the network in plaintext. Tool results are untrusted input to the model (prompt-injection surface). Keep `mcp.json` files with secrets out of version control.
 
 ## Run the web gateway
 

@@ -1,16 +1,23 @@
 package dev.kualu.http;
 
 import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.Proxy;
+import java.net.ProxySelector;
+import java.net.SocketAddress;
 import java.net.URI;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Stream;
 
 /**
  * Thin HTTP client that accepts a URL, headers, and an optional body.
+ * When {@code AGENT_HTTP_PROXY} is set (e.g. {@code 127.0.0.1:7890}), all
+ * outbound requests go through that HTTP proxy.
  */
 public class HttpClient {
 
@@ -22,11 +29,68 @@ public class HttpClient {
     }
 
     public HttpClient(Duration timeout) {
+        this(timeout, envProxySelector());
+    }
+
+    /** @param proxy {@code null} for a direct connection */
+    public HttpClient(Duration timeout, ProxySelector proxy) {
         this.timeout = Objects.requireNonNull(timeout, "timeout");
-        this.client = java.net.http.HttpClient.newBuilder()
+        java.net.http.HttpClient.Builder builder = java.net.http.HttpClient.newBuilder()
                 .connectTimeout(timeout)
-                .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
-                .build();
+                .followRedirects(java.net.http.HttpClient.Redirect.NORMAL);
+        if (proxy != null) {
+            builder.proxy(proxy);
+        }
+        this.client = builder.build();
+    }
+
+    /** Reads {@code AGENT_HTTP_PROXY}; {@code null} when unset. */
+    static ProxySelector envProxySelector() {
+        String spec = System.getenv("AGENT_HTTP_PROXY");
+        return (spec == null || spec.isBlank()) ? null : parseProxy(spec);
+    }
+
+    /** Accepts {@code host:port} or {@code scheme://host:port}. */
+    static ProxySelector parseProxy(String spec) {
+        String value = spec.trim();
+        int scheme = value.indexOf("://");
+        if (scheme >= 0) {
+            value = value.substring(scheme + 3);
+        }
+        if (value.isBlank() || value.startsWith(":") || value.endsWith(":")) {
+            throw new IllegalArgumentException(
+                    "AGENT_HTTP_PROXY must look like host:port (got '" + spec + "')");
+        }
+        String host;
+        int port;
+        try {
+            int colon = value.lastIndexOf(':');
+            if (colon > 0) {
+                host = value.substring(0, colon);
+                port = Integer.parseInt(value.substring(colon + 1));
+            } else {
+                host = value;
+                port = 80;
+            }
+            if (host.isBlank() || port < 1 || port > 65535) {
+                throw new IllegalArgumentException("bad host/port");
+            }
+        } catch (RuntimeException ex) {
+            throw new IllegalArgumentException(
+                    "AGENT_HTTP_PROXY must look like host:port (got '" + spec + "')", ex);
+        }
+        Proxy proxy = new Proxy(Proxy.Type.HTTP, InetSocketAddress.createUnresolved(host, port));
+        return new ProxySelector() {
+            @Override
+            public List<Proxy> select(URI uri) {
+                return List.of(proxy);
+            }
+
+            @Override
+            public void connectFailed(URI uri, SocketAddress sa, IOException ioe) {
+                // failures surface on the request itself
+            }
+        };
     }
 
     public HttpResponse<String> get(String url, Map<String, String> headers) {

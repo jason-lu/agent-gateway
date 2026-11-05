@@ -4,6 +4,9 @@ import dev.kualu.llm.AgentTool;
 import dev.kualu.llm.tools.ExecTool;
 import dev.kualu.llm.client.LlmClient;
 import dev.kualu.llm.memory.MemoryCompressor;
+import dev.kualu.mcp.McpConnectionManager;
+import dev.kualu.mcp.McpServerConfig;
+import dev.kualu.mcp.config.McpJsonConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -12,6 +15,7 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 
 public class Main {
@@ -40,7 +44,36 @@ public class Main {
         LlmClient client = LlmClient.fromEnvironment();
         MemoryCompressor compressor = memoryCompressor(client);
         BufferedReader in = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
-        new ChatConsole(client, in, System.out, streaming, compressor, execTools()).run();
+        McpConnectionManager mcp = mcpManager();
+        List<AgentTool> staticTools = execTools();
+        try {
+            new ChatConsole(client, in, System.out, streaming, compressor, () -> {
+                List<AgentTool> all = new ArrayList<>(staticTools);
+                all.addAll(mcp.tools());
+                return all;
+            }).run();
+        } finally {
+            mcp.close();
+        }
+    }
+
+    /** Builds the MCP manager from {@code AGENT_MCP_*} and the {@code mcp.json} file. */
+    static McpConnectionManager mcpManager() {
+        if (!Boolean.parseBoolean(envOr("AGENT_MCP_ENABLED", "true"))) {
+            log.info("mcp configured: enabled=false");
+            return new McpConnectionManager(List.of());
+        }
+        String path = envOr("AGENT_MCP_CONFIG", "./mcp.json");
+        List<McpServerConfig> servers = McpJsonConfig.load(Path.of(path));
+        log.info("mcp configured: {} server(s) from {}", servers.size(), path);
+        McpConnectionManager manager = new McpConnectionManager(
+                servers,
+                McpConnectionManager.DEFAULT_HANDSHAKE_TIMEOUT,
+                Duration.ofSeconds(Long.parseLong(envOr("AGENT_MCP_TIMEOUT", "60"))),
+                Integer.parseInt(envOr("AGENT_MCP_OUTPUT_LIMIT", "8000")),
+                Duration.ofSeconds(Long.parseLong(envOr("AGENT_MCP_REFRESH", "300"))));
+        manager.start();
+        return manager;
     }
 
     /** Builds the tool list from {@code AGENT_EXEC_*}; empty when the exec tool is disabled. */

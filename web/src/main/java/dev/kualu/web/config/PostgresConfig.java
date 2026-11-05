@@ -6,6 +6,7 @@ import com.zaxxer.hikari.HikariDataSource;
 import dev.kualu.web.auth.JdbcUserDetailsService;
 import dev.kualu.web.auth.JdbcUserSeeder;
 import dev.kualu.web.auth.PostgresRefreshTokenStore;
+import dev.kualu.web.auth.PostgresTokenStore;
 import dev.kualu.web.auth.UserPasswordStore;
 import dev.kualu.web.session.ChatMessageCodec;
 import dev.kualu.web.session.PostgresSessionStore;
@@ -91,6 +92,11 @@ public class PostgresConfig {
     @Bean
     public PostgresRefreshTokenStore refreshTokenStore(JdbcTemplate jdbc) {
         return new PostgresRefreshTokenStore(jdbc);
+    }
+
+    @Bean
+    public PostgresTokenStore mcpTokenStore(JdbcTemplate jdbc) {
+        return new PostgresTokenStore(jdbc);
     }
 
     /**

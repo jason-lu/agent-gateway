@@ -5,6 +5,7 @@ import dev.kualu.llm.client.LlmClient;
 import dev.kualu.llm.LlmException;
 import dev.kualu.llm.memory.MemoryCompressor;
 import dev.kualu.llm.tools.ToolLoop;
+import dev.kualu.mcp.McpConnectionManager;
 import dev.kualu.web.api.ApiDtos.HistoryMessage;
 import dev.kualu.web.config.LlmProperties;
 import dev.kualu.web.session.Session;
@@ -14,12 +15,15 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
  * Turns HTTP chat operations into llm-core calls and session updates.
- * Tool calls (the exec tool) are run by {@link ToolLoop} inside the turn.
+ * Tool calls (exec + MCP tools) are run by {@link ToolLoop} inside the turn;
+ * the tool list is re-read every turn so MCP tools can come and go.
  */
 @Service
 public class ChatService {
@@ -37,12 +41,26 @@ public class ChatService {
             ObjectProvider<LlmClient> llmClients,
             ObjectProvider<MemoryCompressor> compressors,
             LlmProperties llmProperties,
-            List<AgentTool> tools) {
+            List<AgentTool> tools,
+            ObjectProvider<McpConnectionManager> mcpManagers) {
         this.sessionStore = sessionStore;
         this.llmClient = llmClients.getIfAvailable();
         this.compressor = compressors.getIfAvailable();
         this.llmProperties = llmProperties;
-        this.toolLoop = this.llmClient == null ? null : new ToolLoop(this.llmClient, tools);
+        this.toolLoop = this.llmClient == null ? null : new ToolLoop(this.llmClient, toolSupplier(tools, mcpManagers));
+    }
+
+    /** Static beans (exec) plus the current MCP tool snapshot, per turn. */
+    private static Supplier<List<AgentTool>> toolSupplier(
+            List<AgentTool> staticTools, ObjectProvider<McpConnectionManager> mcpManagers) {
+        return () -> {
+            List<AgentTool> all = new ArrayList<>(staticTools);
+            McpConnectionManager manager = mcpManagers.getIfAvailable();
+            if (manager != null) {
+                all.addAll(manager.tools());
+            }
+            return all;
+        };
     }
 
     public boolean isLlmConfigured() {

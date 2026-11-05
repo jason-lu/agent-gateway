@@ -8,12 +8,16 @@ import dev.kualu.llm.ToolCall;
 import dev.kualu.llm.ToolSpec;
 import dev.kualu.llm.client.LlmClient;
 import dev.kualu.llm.memory.ConversationMemory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
  * Runs the tool-calling loop: ask the model, execute any requested tools, feed the
@@ -23,15 +27,20 @@ import java.util.function.Consumer;
  * tool-call turn with its tool results, and the final assistant text. On failure,
  * whatever actually happened is kept (the user turn, completed tool rounds, and any
  * partially streamed text); a run that produced nothing leaves the memory untouched.
+ *
+ * <p>The tool list may come from a {@link Supplier} and is snapshotted at the start
+ * of every run, so dynamically discovered tools (e.g. MCP) can appear or disappear
+ * between turns without restarting the loop.
  */
 public final class ToolLoop {
 
     /** Upper bound on model calls per run; each round may request and execute tools. */
     public static final int DEFAULT_MAX_ROUNDS = 8;
 
+    private static final Logger log = LoggerFactory.getLogger(ToolLoop.class);
+
     private final LlmClient client;
-    private final Map<String, AgentTool> toolsByName;
-    private final List<ToolSpec> specs;
+    private final Supplier<List<AgentTool>> tools;
     private final int maxRounds;
 
     public ToolLoop(LlmClient client, List<AgentTool> tools) {
@@ -43,20 +52,33 @@ public final class ToolLoop {
      * @throws IllegalArgumentException if {@code maxRounds < 1} or two tools share a name
      */
     public ToolLoop(LlmClient client, List<AgentTool> tools, int maxRounds) {
+        this(client, fixed(tools), maxRounds);
+    }
+
+    public ToolLoop(LlmClient client, Supplier<List<AgentTool>> tools) {
+        this(client, tools, DEFAULT_MAX_ROUNDS);
+    }
+
+    /** @param tools supplies the tool list; evaluated once per {@code run} */
+    public ToolLoop(LlmClient client, Supplier<List<AgentTool>> tools, int maxRounds) {
         this.client = Objects.requireNonNull(client, "client");
-        Objects.requireNonNull(tools, "tools");
+        this.tools = Objects.requireNonNull(tools, "tools");
         if (maxRounds < 1) {
             throw new IllegalArgumentException("maxRounds must be >= 1 (got " + maxRounds + ")");
         }
+        this.maxRounds = maxRounds;
+    }
+
+    private static Supplier<List<AgentTool>> fixed(List<AgentTool> tools) {
+        Objects.requireNonNull(tools, "tools");
         Map<String, AgentTool> byName = new LinkedHashMap<>();
         for (AgentTool tool : tools) {
             if (byName.putIfAbsent(tool.name(), tool) != null) {
                 throw new IllegalArgumentException("duplicate tool name: " + tool.name());
             }
         }
-        this.toolsByName = Map.copyOf(byName);
-        this.specs = tools.stream().map(ToolSpec::of).toList();
-        this.maxRounds = maxRounds;
+        List<AgentTool> copy = List.copyOf(tools);
+        return () -> copy;
     }
 
     /**
@@ -79,6 +101,7 @@ public final class ToolLoop {
     private String run(ConversationMemory memory, String userContent, Consumer<String> onDelta, boolean stream) {
         Objects.requireNonNull(memory, "memory");
         Objects.requireNonNull(userContent, "userContent");
+        ToolSet toolSet = snapshot();
 
         List<ChatMessage> payload = new ArrayList<>(memory.context());
         payload.add(ChatMessage.user(userContent));
@@ -94,7 +117,7 @@ public final class ToolLoop {
                     if (onDelta != null) {
                         onDelta.accept(delta);
                     }
-                }, stream);
+                }, stream, toolSet);
                 reply.append(turn.content());
 
                 if (!turn.hasToolCalls()) {
@@ -107,7 +130,7 @@ public final class ToolLoop {
                 turns.add(assistant);
                 payload.add(assistant);
                 for (ToolCall call : turn.toolCalls()) {
-                    ChatMessage result = ChatMessage.tool(executeTool(call), call.id());
+                    ChatMessage result = ChatMessage.tool(executeTool(toolSet, call), call.id());
                     turns.add(result);
                     payload.add(result);
                 }
@@ -125,24 +148,50 @@ public final class ToolLoop {
         }
     }
 
+    /** One run's tool view: name lookup plus the wire definitions. */
+    private record ToolSet(Map<String, AgentTool> byName, List<ToolSpec> specs) {
+
+        static final ToolSet EMPTY = new ToolSet(Map.of(), List.of());
+    }
+
+    private ToolSet snapshot() {
+        List<AgentTool> supplied = tools.get();
+        if (supplied == null || supplied.isEmpty()) {
+            return ToolSet.EMPTY;
+        }
+        Map<String, AgentTool> byName = new LinkedHashMap<>();
+        List<ToolSpec> specs = new ArrayList<>();
+        for (AgentTool tool : supplied) {
+            if (tool == null) {
+                continue;
+            }
+            if (byName.putIfAbsent(tool.name(), tool) != null) {
+                log.warn("duplicate tool name in dynamic tool list: {}; first entry wins", tool.name());
+                continue;
+            }
+            specs.add(ToolSpec.of(tool));
+        }
+        return new ToolSet(Map.copyOf(byName), List.copyOf(specs));
+    }
+
     /**
      * With no tools configured the plain text path is used, which is identical on
      * the wire and cannot return tool calls. With tools, the request carries the
      * definitions and the reply is parsed for {@code tool_calls}.
      */
-    private AssistantTurn ask(List<ChatMessage> payload, Consumer<String> onDelta, boolean stream) {
-        if (specs.isEmpty()) {
+    private AssistantTurn ask(List<ChatMessage> payload, Consumer<String> onDelta, boolean stream, ToolSet toolSet) {
+        if (toolSet.specs().isEmpty()) {
             String text = stream ? client.chatStream(payload, onDelta) : client.chat(payload);
             return new AssistantTurn(text, List.of());
         }
         return stream
-                ? client.completeStream(payload, specs, onDelta)
-                : client.complete(payload, specs);
+                ? client.completeStream(payload, toolSet.specs(), onDelta)
+                : client.complete(payload, toolSet.specs());
     }
 
     /** Expected failures are returned as result text so the model can react; nothing escapes. */
-    private String executeTool(ToolCall call) {
-        AgentTool tool = toolsByName.get(call.name());
+    private String executeTool(ToolSet toolSet, ToolCall call) {
+        AgentTool tool = toolSet.byName().get(call.name());
         if (tool == null) {
             return "error: unknown tool '" + call.name() + "'";
         }

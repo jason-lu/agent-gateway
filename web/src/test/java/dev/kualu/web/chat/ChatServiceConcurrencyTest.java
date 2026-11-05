@@ -36,7 +36,7 @@ class ChatServiceConcurrencyTest {
                 store,
                 provider(client),
                 emptyCompressorProvider(),
-                new LlmProperties("http://localhost", "key", "model", 90), List.of());
+                new LlmProperties("http://localhost", "key", "model", 90), List.of(), emptyMcpProvider());
 
         int workers = 8;
         CountDownLatch start = new CountDownLatch(1);
@@ -80,6 +80,11 @@ class ChatServiceConcurrencyTest {
 
     @SuppressWarnings("unchecked")
     private static org.springframework.beans.factory.ObjectProvider<dev.kualu.llm.memory.MemoryCompressor> emptyCompressorProvider() {
+        return mock(org.springframework.beans.factory.ObjectProvider.class);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static org.springframework.beans.factory.ObjectProvider<dev.kualu.mcp.McpConnectionManager> emptyMcpProvider() {
         return mock(org.springframework.beans.factory.ObjectProvider.class);
     }
 }
