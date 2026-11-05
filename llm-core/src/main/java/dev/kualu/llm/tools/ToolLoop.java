@@ -86,7 +86,7 @@ public final class ToolLoop {
      * said across tool rounds) is returned.
      */
     public String run(ConversationMemory memory, String userContent) {
-        return run(memory, userContent, null, false);
+        return runTurn(memory, ChatMessage.user(userContent), null, false);
     }
 
     /**
@@ -95,16 +95,33 @@ public final class ToolLoop {
      * rounds) is returned.
      */
     public String run(ConversationMemory memory, String userContent, Consumer<String> onDelta) {
-        return run(memory, userContent, Objects.requireNonNull(onDelta, "onDelta"), true);
+        return runTurn(memory, ChatMessage.user(userContent), Objects.requireNonNull(onDelta, "onDelta"), true);
     }
 
-    private String run(ConversationMemory memory, String userContent, Consumer<String> onDelta, boolean stream) {
+    /**
+     * Runs one user turn carrying images (URLs / {@code data:} URIs for vision
+     * models) without streaming. {@code images} may be {@code null} or empty.
+     */
+    public String run(ConversationMemory memory, String userContent, List<String> images) {
+        return runTurn(memory, ChatMessage.user(userContent, images), null, false);
+    }
+
+    /**
+     * Runs one user turn carrying images (URLs / {@code data:} URIs for vision
+     * models), streaming text deltas to {@code onDelta} as they arrive.
+     * {@code images} may be {@code null} or empty.
+     */
+    public String run(ConversationMemory memory, String userContent, List<String> images, Consumer<String> onDelta) {
+        return runTurn(memory, ChatMessage.user(userContent, images), Objects.requireNonNull(onDelta, "onDelta"), true);
+    }
+
+    private String runTurn(ConversationMemory memory, ChatMessage userTurn, Consumer<String> onDelta, boolean stream) {
         Objects.requireNonNull(memory, "memory");
-        Objects.requireNonNull(userContent, "userContent");
+        Objects.requireNonNull(userTurn, "userTurn");
         ToolSet toolSet = snapshot();
 
         List<ChatMessage> payload = new ArrayList<>(memory.context());
-        payload.add(ChatMessage.user(userContent));
+        payload.add(userTurn);
         List<ChatMessage> turns = new ArrayList<>();
         StringBuilder reply = new StringBuilder();
         StringBuilder streamed = new StringBuilder();
@@ -122,7 +139,7 @@ public final class ToolLoop {
 
                 if (!turn.hasToolCalls()) {
                     turns.add(ChatMessage.assistant(turn.content()));
-                    commit(memory, userContent, turns);
+                    commit(memory, userTurn, turns);
                     return reply.toString();
                 }
 
@@ -142,7 +159,7 @@ public final class ToolLoop {
                 turns.add(ChatMessage.assistant(streamed.toString()));
             }
             if (!turns.isEmpty()) {
-                commit(memory, userContent, turns);
+                commit(memory, userTurn, turns);
             }
             throw ex;
         }
@@ -204,9 +221,9 @@ public final class ToolLoop {
         }
     }
 
-    private static void commit(ConversationMemory memory, String userContent, List<ChatMessage> turns) {
+    private static void commit(ConversationMemory memory, ChatMessage userTurn, List<ChatMessage> turns) {
         List<ChatMessage> next = new ArrayList<>(memory.messages());
-        next.add(ChatMessage.user(userContent));
+        next.add(userTurn);
         next.addAll(turns);
         memory.replaceAll(next);
     }

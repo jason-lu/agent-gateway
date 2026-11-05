@@ -26,7 +26,7 @@ public final class ChatMessageCodec {
         this.mapper = mapper;
     }
 
-    /** @return a JSON array; {@code toolCallId} and {@code toolCalls} are omitted when absent */
+    /** @return a JSON array; {@code toolCallId}, {@code toolCalls} and {@code images} are omitted when absent */
     public String encode(List<ChatMessage> messages) {
         ArrayNode array = mapper.createArrayNode();
         for (ChatMessage message : messages) {
@@ -43,6 +43,12 @@ public final class ChatMessageCodec {
                     callNode.put("id", call.id());
                     callNode.put("name", call.name());
                     callNode.put("arguments", call.arguments());
+                }
+            }
+            if (message.images() != null) {
+                ArrayNode images = node.putArray("images");
+                for (String image : message.images()) {
+                    images.add(image);
                 }
             }
         }
@@ -66,7 +72,8 @@ public final class ChatMessageCodec {
                     node.get("role").asText(),
                     node.get("content").asText(),
                     toolCallId,
-                    decodeToolCalls(node.get("toolCalls"))));
+                    decodeToolCalls(node.get("toolCalls")),
+                    decodeImages(node.get("images"))));
         }
         return List.copyOf(messages);
     }
@@ -84,5 +91,17 @@ public final class ChatMessageCodec {
                     callNode.get("arguments").asText()));
         }
         return List.copyOf(calls);
+    }
+
+    /** @return {@code null} when the node is absent or carries no images */
+    private static List<String> decodeImages(JsonNode imagesNode) {
+        if (imagesNode == null || !imagesNode.isArray() || imagesNode.size() == 0) {
+            return null;
+        }
+        List<String> images = new ArrayList<>(imagesNode.size());
+        for (JsonNode imageNode : imagesNode) {
+            images.add(imageNode.asText());
+        }
+        return List.copyOf(images);
     }
 }

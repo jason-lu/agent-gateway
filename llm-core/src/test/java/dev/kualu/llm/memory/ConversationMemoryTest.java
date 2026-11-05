@@ -135,6 +135,21 @@ class ConversationMemoryTest {
     }
 
     @Test
+    void chatMessage_images_validation() {
+        List<String> images = List.of("data:image/png;base64,AAAA");
+        assertEquals(images, ChatMessage.user("x", images).images());
+        assertEquals(null, ChatMessage.user("x").images());
+        assertEquals(null, ChatMessage.user("x", List.of()).images());
+        assertThrows(IllegalArgumentException.class,
+                () -> new ChatMessage("user", "x", null, null, List.of()));
+        assertThrows(IllegalArgumentException.class,
+                () -> new ChatMessage("assistant", "x", null, null, images));
+        assertThrows(IllegalArgumentException.class,
+                () -> ChatMessage.user("x", java.util.Arrays.asList((String) null)));
+        assertThrows(IllegalArgumentException.class, () -> ChatMessage.user("x", List.of(" ")));
+    }
+
+    @Test
     void addTool_storesToolCallId() {
         ConversationMemory memory = new ConversationMemory()
                 .addUser("run ls")

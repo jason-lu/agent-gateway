@@ -67,14 +67,14 @@ public class ChatService {
         return llmProperties.isConfigured() && llmClient != null;
     }
 
-    public String chat(Session session, String content) {
+    public String chat(Session session, String content, List<String> images) {
         requireLlm();
         // ConversationMemory is not thread-safe; serialize turns per session.
         synchronized (session.memory()) {
             try {
                 compress(session);
                 // The tool loop commits the user turn, any tool rounds, and the reply.
-                String reply = toolLoop.run(session.memory(), content);
+                String reply = toolLoop.run(session.memory(), content, images);
                 persistQuietly(session);
                 return reply;
             } catch (LlmException ex) {
@@ -83,12 +83,12 @@ public class ChatService {
         }
     }
 
-    public String chatStream(Session session, String content, Consumer<String> onDelta) {
+    public String chatStream(Session session, String content, List<String> images, Consumer<String> onDelta) {
         requireLlm();
         synchronized (session.memory()) {
             try {
                 compress(session);
-                String reply = toolLoop.run(session.memory(), content, onDelta);
+                String reply = toolLoop.run(session.memory(), content, images, onDelta);
                 persistQuietly(session);
                 return reply;
             } catch (RuntimeException ex) {
@@ -108,7 +108,7 @@ public class ChatService {
             return session.memory().messages().stream()
                     .filter(message -> "user".equals(message.role())
                             || ("assistant".equals(message.role()) && !message.content().isBlank()))
-                    .map(message -> new HistoryMessage(message.role(), message.content()))
+                    .map(message -> new HistoryMessage(message.role(), message.content(), message.images()))
                     .toList();
         }
     }

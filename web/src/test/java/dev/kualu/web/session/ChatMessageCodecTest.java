@@ -63,6 +63,27 @@ class ChatMessageCodecTest {
     }
 
     @Test
+    void images_surviveTheRoundTrip() {
+        List<String> images = List.of("data:image/png;base64,AAAA", "https://example.com/cat.png");
+        List<ChatMessage> original = List.of(
+                ChatMessage.user("这是什么？", images),
+                ChatMessage.assistant("一只猫"));
+
+        List<ChatMessage> decoded = codec.decode(codec.encode(original));
+
+        assertEquals(original, decoded);
+        assertEquals(images, decoded.get(0).images());
+    }
+
+    @Test
+    void images_areOmittedFromJsonWhenAbsent() {
+        String json = codec.encode(List.of(ChatMessage.user("hi")));
+
+        assertFalse(json.contains("images"), "absent images must not be written: " + json);
+        assertEquals(null, codec.decode(json).get(0).images());
+    }
+
+    @Test
     void nullToolCallId_isOmittedFromJsonButNotConfusedWithEmpty() {
         String json = codec.encode(List.of(ChatMessage.user("hi")));
 

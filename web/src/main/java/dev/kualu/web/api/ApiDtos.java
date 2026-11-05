@@ -19,7 +19,7 @@ public final class ApiDtos {
     public record MessageResponse(String reply) {
     }
 
-    public record HistoryMessage(String role, String content) {
+    public record HistoryMessage(String role, String content, List<String> images) {
     }
 
     public record HealthResponse(String status, boolean llmConfigured, boolean dbUp) {

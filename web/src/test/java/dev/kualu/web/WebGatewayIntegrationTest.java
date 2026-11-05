@@ -217,6 +217,33 @@ class WebGatewayIntegrationTest {
     }
 
     @Test
+    void chatRejectsUnsupportedImageUrls() throws Exception {
+        String token = login("alice", "password123");
+        MvcResult created = mockMvc.perform(post("/api/v1/sessions")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isCreated())
+                .andReturn();
+        String id = com.jayway.jsonpath.JsonPath.read(
+                created.getResponse().getContentAsString(), "$.id");
+
+        mockMvc.perform(post("/api/v1/sessions/" + id + "/messages")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"content\":\"hi\",\"images\":[\"javascript:alert(1)\"]}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().string(containsString("images")));
+
+        mockMvc.perform(post("/api/v1/sessions/" + id + "/messages/stream")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"content\":\"hi\",\"images\":[\"\"]}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().string(containsString("image")));
+    }
+
+    @Test
     void changePasswordRequiresAuth() throws Exception {
         mockMvc.perform(post("/api/v1/auth/change-password")
                         .contentType(MediaType.APPLICATION_JSON)

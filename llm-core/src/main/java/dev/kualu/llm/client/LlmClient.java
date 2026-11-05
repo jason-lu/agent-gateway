@@ -195,12 +195,17 @@ public class LlmClient {
         for (ChatMessage message : messages) {
             Objects.requireNonNull(message, "message");
             boolean carriesTools = message.toolCalls() != null || "tool".equals(message.role());
-            if (message.content().isBlank() && !carriesTools) {
+            boolean carriesImages = message.images() != null && !message.images().isEmpty();
+            if (message.content().isBlank() && !carriesTools && !carriesImages) {
                 throw new LlmException("message content must not be blank");
             }
             JsonObject item = new JsonObject();
             item.addProperty("role", message.role());
-            item.addProperty("content", message.content());
+            if (carriesImages) {
+                item.add("content", multimodalContent(message));
+            } else {
+                item.addProperty("content", message.content());
+            }
             if (message.toolCallId() != null) {
                 item.addProperty("tool_call_id", message.toolCallId());
             }
@@ -242,6 +247,29 @@ public class LlmClient {
             body.addProperty("stream", true);
         }
         return body.toString();
+    }
+
+    /**
+     * {@code content} as a part array: optional text part plus one
+     * {@code image_url} part per image (OpenAI-style vision input).
+     */
+    private static JsonArray multimodalContent(ChatMessage message) {
+        JsonArray parts = new JsonArray();
+        if (!message.content().isBlank()) {
+            JsonObject text = new JsonObject();
+            text.addProperty("type", "text");
+            text.addProperty("text", message.content());
+            parts.add(text);
+        }
+        for (String url : message.images()) {
+            JsonObject imageUrl = new JsonObject();
+            imageUrl.addProperty("url", url);
+            JsonObject image = new JsonObject();
+            image.addProperty("type", "image_url");
+            image.add("image_url", imageUrl);
+            parts.add(image);
+        }
+        return parts;
     }
 
     private String completionsUrl() {

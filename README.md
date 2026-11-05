@@ -237,14 +237,22 @@ New passwords need at least 8 characters; a wrong `currentPassword` is `400`. Th
 | GET | `/api/v1/sessions/{id}` | USER | Session metadata |
 | DELETE | `/api/v1/sessions/{id}` | USER | Delete session |
 | GET | `/api/v1/sessions/{id}/messages` | USER | Message history |
-| POST | `/api/v1/sessions/{id}/messages` | USER | `{content}` → `{reply}` |
-| POST | `/api/v1/sessions/{id}/messages/stream` | USER | `{content}` → SSE stream |
+| POST | `/api/v1/sessions/{id}/messages` | USER | `{content, images?}` → `{reply}` |
+| POST | `/api/v1/sessions/{id}/messages/stream` | USER | `{content, images?}` → SSE stream |
 | GET | `/api/v1/admin/users` | ADMIN | List configured users |
 
 SSE events: `delta` (`{"text"}`), then `done` (`{"reply"}`) or `error` (`{"message"}`).
 
 Error body: `{ "status", "error", "message" }`.
 Chat is `503` when LLM is not configured, `502` when the upstream LLM fails.
+
+**Image input (vision).** A message may carry `images`: up to 10 entries, each a
+`data:image/...` base64 URI or an `http(s)` image URL (≤ 25M characters each).
+Text and images travel together as OpenAI-style multimodal `content` parts, so
+`LLM_MODEL` must be a vision-capable model. `content` may be blank when images
+are present (recognition without a question); at least one of the two is
+required. History entries come back as `{role, content, images?}` — the frontend
+renders the images in the conversation.
 
 Sessions are isolated per authenticated user (404 if not found or not yours).
 Sessions and accounts are persisted to PostgreSQL by default and survive restarts; see [Persistence](#persistence).
@@ -346,6 +354,15 @@ String reply = client.chat(List.of(
         ChatMessage.user("Bye")));
 ```
 
+User turns may carry images (URLs or `data:` URIs) for vision models — the
+client serializes them as multimodal `image_url` content parts:
+
+```java
+String reply = client.chat(List.of(
+        ChatMessage.user("What is in this picture?",
+                List.of("data:image/png;base64,iVBORw0KGgo..."))));
+```
+
 Tool results use `role: "tool"` and carry the matching `tool_call_id`:
 
 ```java
@@ -414,7 +431,7 @@ module your.app {
 ./gradlew test
 ```
 
-Covers HTTP client, LLM config/`chat`/`chatStream` (including multi-turn message lists, SSE, and error paths), the function-calling protocol (`tools`, `tool_calls` parsing and streaming), the tool-call loop and the cross-platform exec tool (exit codes, timeout kill, output truncation, working directory), conversation memory, memory compression (layout, incremental summary, cut-point safety, failure handling), console commands, session store isolation, JWT login/security, and REST session/message APIs.
+Covers HTTP client, LLM config/`chat`/`chatStream` (including multi-turn message lists, multimodal image content, SSE, and error paths), the function-calling protocol (`tools`, `tool_calls` parsing and streaming), the tool-call loop and the cross-platform exec tool (exit codes, timeout kill, output truncation, working directory), conversation memory, memory compression (layout, incremental summary, cut-point safety, failure handling), console commands, session store isolation, JWT login/security, and REST session/message APIs.
 
 Persistence is covered by integration tests that run a real PostgreSQL via
 [io.zonky.test:embedded-postgres](https://github.com/zonkyio/embedded-postgres) — no Docker required.

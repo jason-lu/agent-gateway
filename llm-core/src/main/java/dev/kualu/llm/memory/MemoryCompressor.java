@@ -191,6 +191,9 @@ public final class MemoryCompressor {
         sb.append("\n\n[Older turns]\n");
         for (ChatMessage turn : turns) {
             sb.append(turn.role()).append(": ").append(turn.content());
+            if (turn.images() != null && !turn.images().isEmpty()) {
+                sb.append("（附图 ").append(turn.images().size()).append(" 张）");
+            }
             if (turn.toolCallId() != null) {
                 sb.append(" (toolCallId=").append(turn.toolCallId()).append(')');
             }

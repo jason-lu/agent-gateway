@@ -46,7 +46,7 @@ class ChatServiceConcurrencyTest {
             for (int i = 0; i < workers; i++) {
                 futures.add(pool.submit(() -> {
                     start.await();
-                    service.chat(session, "hello");
+                    service.chat(session, "hello", null);
                     return null;
                 }));
             }

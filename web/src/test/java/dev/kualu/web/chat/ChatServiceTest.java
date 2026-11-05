@@ -76,13 +76,35 @@ class ChatServiceTest {
     }
 
     @Test
+    void chatForwardsImagesToTheModelAndHistoryReturnsThem() {
+        InMemorySessionStore store = new InMemorySessionStore();
+        Session session = store.create("ada", null);
+        RecordingLlm llm = new RecordingLlm();
+        ChatService service = new ChatService(
+                store, clientProvider(llm), emptyCompressorProvider(), configuredProperties(), List.of(), emptyMcpProvider());
+        List<String> images = List.of("data:image/png;base64,AAAA");
+
+        assertEquals("REPLY", service.chat(session, "这是什么？", images));
+
+        List<ChatMessage> payload = llm.replyPayloads.get(0);
+        ChatMessage sentUser = payload.get(payload.size() - 1);
+        assertEquals("user", sentUser.role());
+        assertEquals(images, sentUser.images());
+
+        var history = service.history(session);
+        assertEquals(2, history.size());
+        assertEquals(images, history.get(0).images());
+        assertEquals(null, history.get(1).images());
+    }
+
+    @Test
     void chatThrowsWhenLlmMissing() {
         InMemorySessionStore store = new InMemorySessionStore();
         Session session = store.create("ada", null);
         ChatService service = new ChatService(
                 store, emptyProvider(), emptyCompressorProvider(), new LlmProperties(null, null, null, 90), List.of(), emptyMcpProvider());
 
-        assertThrows(LlmNotConfiguredException.class, () -> service.chat(session, "hi"));
+        assertThrows(LlmNotConfiguredException.class, () -> service.chat(session, "hi", null));
         assertEquals(0, session.messageCount());
     }
 
@@ -117,7 +139,7 @@ class ChatServiceTest {
                 compressorProvider(new MemoryCompressor(llm, 8, 3, null)),
                 configuredProperties(), List.of(), emptyMcpProvider());
 
-        assertEquals("REPLY", service.chat(session, "new question"));
+        assertEquals("REPLY", service.chat(session, "new question", null));
 
         List<ChatMessage> payload = llm.replyPayloads.get(0);
         assertTrue(payload.stream().anyMatch(m -> m.content().startsWith(MemoryCompressor.SUMMARY_PREFIX)),
@@ -151,7 +173,7 @@ class ChatServiceTest {
                 compressorProvider(new MemoryCompressor(llm, 8, 3, null)),
                 configuredProperties(), List.of(), emptyMcpProvider());
 
-        assertEquals("REPLY", service.chat(session, "new question"));
+        assertEquals("REPLY", service.chat(session, "new question", null));
 
         // History grew by the new turn and no summary was written.
         assertEquals(23, session.messageCount());
@@ -173,7 +195,7 @@ class ChatServiceTest {
         ChatService service = new ChatService(
                 store, clientProvider(llm), emptyCompressorProvider(), configuredProperties(), List.of(), emptyMcpProvider());
 
-        assertEquals("REPLY", service.chat(session, "new question"));
+        assertEquals("REPLY", service.chat(session, "new question", null));
         assertEquals(before + 2, session.messageCount());
         assertEquals(before + 1, llm.replyPayloads.get(0).size());
     }
@@ -192,7 +214,7 @@ class ChatServiceTest {
                 store, clientProvider(llm), emptyCompressorProvider(), configuredProperties(), List.of(), emptyMcpProvider());
 
         // The reply is already produced; a failed write must not turn it into an error.
-        assertEquals("REPLY", service.chat(session, "new question"));
+        assertEquals("REPLY", service.chat(session, "new question", null));
         assertEquals(2, session.messageCount());
     }
 

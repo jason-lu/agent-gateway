@@ -264,6 +264,31 @@ class ToolLoopTest {
     }
 
     @Test
+    void userTurnImagesAreSentToTheModelAndCommitted() {
+        List<List<ChatMessage>> requests = new ArrayList<>();
+        LlmClient llm = new LlmClient(new LlmConfig("http://localhost", "key", "model")) {
+            @Override
+            public String chat(List<ChatMessage> messages) {
+                requests.add(List.copyOf(messages));
+                return "一只猫";
+            }
+        };
+        ConversationMemory memory = new ConversationMemory();
+        List<String> images = List.of("data:image/png;base64,AAAA");
+
+        String reply = new ToolLoop(llm, List.of()).run(memory, "这是什么？", images);
+
+        assertEquals("一只猫", reply);
+        ChatMessage sent = requests.get(0).get(requests.get(0).size() - 1);
+        assertEquals("user", sent.role());
+        assertEquals("这是什么？", sent.content());
+        assertEquals(images, sent.images());
+        ChatMessage committed = memory.messages().get(0);
+        assertEquals("这是什么？", committed.content());
+        assertEquals(images, committed.images());
+    }
+
+    @Test
     void duplicateToolNamesAreRejected() {
         assertThrows(IllegalArgumentException.class,
                 () -> new ToolLoop(new ScriptedLlm(), List.of(new RecordingTool(), new RecordingTool())));

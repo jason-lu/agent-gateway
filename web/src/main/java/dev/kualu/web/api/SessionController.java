@@ -12,8 +12,6 @@ import dev.kualu.web.chat.LlmNotConfiguredException;
 import dev.kualu.web.chat.SessionNotFoundException;
 import dev.kualu.web.session.Session;
 import dev.kualu.web.session.SessionStore;
-import jakarta.validation.Valid;
-import jakarta.validation.constraints.NotBlank;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -25,6 +23,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
@@ -41,6 +40,12 @@ public class SessionController {
      * event. Override it with a ceiling generous enough for the longest answers.
      */
     private static final long SSE_TIMEOUT_MS = TimeUnit.MINUTES.toMillis(30);
+
+    /** Per-message image cap — enough for a photo set, small enough to bound the payload. */
+    private static final int MAX_IMAGES = 10;
+
+    /** Per-image cap in characters (base64 data URIs included); ~18 MB of binary. */
+    private static final int MAX_IMAGE_CHARS = 25_000_000;
 
     private final SessionStore sessionStore;
     private final ChatService chatService;
@@ -88,9 +93,10 @@ public class SessionController {
     public MessageResponse send(
             @AuthenticationPrincipal String username,
             @PathVariable String id,
-            @Valid @RequestBody MessageBody body) {
+            @RequestBody MessageBody body) {
+        validate(body);
         Session session = requireSession(username, id);
-        String reply = chatService.chat(session, body.content());
+        String reply = chatService.chat(session, body.content(), body.images());
         return new MessageResponse(reply);
     }
 
@@ -98,12 +104,13 @@ public class SessionController {
     public SseEmitter stream(
             @AuthenticationPrincipal String username,
             @PathVariable String id,
-            @Valid @RequestBody MessageBody body) {
+            @RequestBody MessageBody body) {
+        validate(body);
         Session session = requireSession(username, id);
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
         Thread worker = new Thread(() -> {
             try {
-                String reply = chatService.chatStream(session, body.content(), delta -> {
+                String reply = chatService.chatStream(session, body.content(), body.images(), delta -> {
                     try {
                         emitter.send(SseEmitter.event().name("delta").data(new SseDelta(delta)));
                     } catch (Exception ex) {
@@ -143,6 +150,51 @@ public class SessionController {
                 session.messageCount());
     }
 
-    public record MessageBody(@NotBlank String content) {
+    /**
+     * A turn is text and/or images: image-only messages are legal (recognition
+     * without a question), blank-and-imageless ones are not.
+     */
+    private static void validate(MessageBody body) {
+        if (body.content().isBlank() && body.images().isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "content and images must not both be empty");
+        }
+        if (body.images().isEmpty()) {
+            return;
+        }
+        if (body.images().size() > MAX_IMAGES) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "at most " + MAX_IMAGES + " images per message");
+        }
+        for (String image : body.images()) {
+            if (image == null || image.isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "image entries must not be blank");
+            }
+            if (image.length() > MAX_IMAGE_CHARS) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "image exceeds the size limit");
+            }
+            if (!isSupportedImageUrl(image)) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST, "images must be data:image/ or http(s) image URLs");
+            }
+        }
+    }
+
+    private static boolean isSupportedImageUrl(String image) {
+        return image.startsWith("data:image/")
+                || image.startsWith("http://")
+                || image.startsWith("https://");
+    }
+
+    /**
+     * @param content user text; {@code null} is normalized to blank (image-only turns)
+     * @param images  image URLs or {@code data:image/...} URIs for vision models;
+     *                {@code null} is normalized to an empty list
+     */
+    public record MessageBody(String content, List<String> images) {
+
+        public MessageBody {
+            content = content == null ? "" : content;
+            images = images == null ? List.of() : List.copyOf(images);
+        }
     }
 }

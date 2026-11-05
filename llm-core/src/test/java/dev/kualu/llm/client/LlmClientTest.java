@@ -1,5 +1,6 @@
 package dev.kualu.llm.client;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.sun.net.httpserver.HttpExchange;
@@ -121,6 +122,40 @@ class LlmClientTest {
         assertEquals("test-model", body.get("model").getAsString());
         assertEquals("user", body.getAsJsonArray("messages").get(0).getAsJsonObject().get("role").getAsString());
         assertEquals("Hi there", body.getAsJsonArray("messages").get(0).getAsJsonObject().get("content").getAsString());
+    }
+
+    @Test
+    void chat_withImages_serializesMultimodalContent() {
+        LlmClient client = new LlmClient(config);
+        List<String> images = List.of("data:image/png;base64,AAAA", "https://example.com/cat.png");
+
+        client.chat(List.of(ChatMessage.user("what is this?", images)));
+
+        JsonObject message = JsonParser.parseString(capturedBody.get()).getAsJsonObject()
+                .getAsJsonArray("messages").get(0).getAsJsonObject();
+        assertTrue(message.get("content").isJsonArray(), "image turns must serialize as a part array");
+        JsonArray parts = message.getAsJsonArray("content");
+        assertEquals(3, parts.size());
+        assertEquals("text", parts.get(0).getAsJsonObject().get("type").getAsString());
+        assertEquals("what is this?", parts.get(0).getAsJsonObject().get("text").getAsString());
+        assertEquals("image_url", parts.get(1).getAsJsonObject().get("type").getAsString());
+        assertEquals("data:image/png;base64,AAAA",
+                parts.get(1).getAsJsonObject().getAsJsonObject("image_url").get("url").getAsString());
+        assertEquals("https://example.com/cat.png",
+                parts.get(2).getAsJsonObject().getAsJsonObject("image_url").get("url").getAsString());
+    }
+
+    @Test
+    void chat_imageOnlyMessage_omitsTheBlankTextPart() {
+        LlmClient client = new LlmClient(config);
+
+        client.chat(List.of(ChatMessage.user("", List.of("data:image/jpeg;base64,BBBB"))));
+
+        JsonObject message = JsonParser.parseString(capturedBody.get()).getAsJsonObject()
+                .getAsJsonArray("messages").get(0).getAsJsonObject();
+        JsonArray parts = message.getAsJsonArray("content");
+        assertEquals(1, parts.size());
+        assertEquals("image_url", parts.get(0).getAsJsonObject().get("type").getAsString());
     }
 
     @Test
