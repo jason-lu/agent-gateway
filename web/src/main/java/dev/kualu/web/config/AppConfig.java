@@ -151,11 +151,13 @@ public class AppConfig {
     }
 
     @Bean
-    public MemoryCompressor memoryCompressor(LlmClient llmClient, MemoryProperties properties) {
+    public MemoryCompressor memoryCompressor(
+            ObjectProvider<LlmClient> llmClients, MemoryProperties properties) {
         if (!properties.enabled()) {
             log.info("memory-compress configured: enabled=false");
             return null;
         }
+        LlmClient llmClient = llmClients.getIfAvailable();
         if (llmClient == null) {
             log.info("memory-compress configured: enabled=true but llm is not configured; compressor inactive");
             return null;
