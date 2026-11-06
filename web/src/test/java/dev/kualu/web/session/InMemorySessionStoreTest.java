@@ -52,13 +52,15 @@ class InMemorySessionStoreTest {
     }
 
     @Test
-    void updatePersistsMemoryMutations() {
+    void mutationsAreVisibleWithoutAnyPersistCall() {
         Session session = store.create("ada", null);
         session.memory().addUser("hi");
         session.memory().addAssistant("hello");
 
-        Session updated = store.update(session);
-        assertEquals(2, updated.messageCount());
+        // The in-memory session *is* the payload: append/replace are flush no-ops.
+        store.appendMessages(session);
+        store.replaceMessages(session);
+
         assertEquals(2, store.find("ada", session.id()).orElseThrow().messageCount());
     }
 

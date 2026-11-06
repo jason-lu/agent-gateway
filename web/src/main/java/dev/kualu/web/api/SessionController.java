@@ -65,7 +65,8 @@ public class SessionController {
         try {
             return sessionStore.listByOwner(username).stream()
                     .map(summary -> new SessionResponse(
-                            summary.id(), summary.owner(), summary.createdAt().toString(), summary.messageCount()))
+                            summary.id(), summary.owner(), summary.title(),
+                            summary.createdAt().toString(), summary.messageCount()))
                     .toList();
         } finally {
             turnMetrics.complete("list", "-", timings);
@@ -218,6 +219,7 @@ public class SessionController {
         return new SessionResponse(
                 session.id(),
                 session.owner(),
+                session.title(),
                 session.createdAt().toString(),
                 session.messageCount());
     }

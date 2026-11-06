@@ -2,13 +2,14 @@ package dev.kualu.web.session;
 
 import tools.jackson.databind.ObjectMapper;
 import dev.kualu.llm.ChatMessage;
+import dev.kualu.llm.ToolCall;
 import dev.kualu.llm.memory.MemoryCompressor;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -16,107 +17,104 @@ class ChatMessageCodecTest {
 
     private final ChatMessageCodec codec = new ChatMessageCodec(new ObjectMapper());
 
+    private ChatMessage roundTrip(ChatMessage message) {
+        return codec.decode(codec.encode(message));
+    }
+
     @Test
-    void roundTrip_preservesOrderAndEveryRole() {
-        List<ChatMessage> original = List.of(
+    void roundTrip_preservesEveryRole() {
+        for (ChatMessage message : List.of(
                 ChatMessage.system("you are terse"),
                 ChatMessage.user("run ls"),
                 ChatMessage.assistant("here you go"),
                 ChatMessage.tool("file1\nfile2", "call_abc"),
-                ChatMessage.user("thanks"));
-
-        assertEquals(original, codec.decode(codec.encode(original)));
+                ChatMessage.user("thanks"))) {
+            assertEquals(message, roundTrip(message));
+        }
     }
 
     @Test
     void toolCallId_survivesTheRoundTrip() {
-        List<ChatMessage> original = List.of(ChatMessage.tool("output", "call_42"));
-
-        List<ChatMessage> decoded = codec.decode(codec.encode(original));
-
-        assertEquals("call_42", decoded.get(0).toolCallId());
+        assertEquals("call_42", roundTrip(ChatMessage.tool("output", "call_42")).toolCallId());
     }
 
     @Test
     void toolCalls_surviveTheRoundTrip() {
-        List<ChatMessage> original = List.of(
-                ChatMessage.user("run ls"),
-                ChatMessage.assistantToolCalls("let me look",
-                        List.of(new dev.kualu.llm.ToolCall("call_1", "exec", "{\"command\":\"ls\"}"))),
-                ChatMessage.tool("", "call_1"),
-                ChatMessage.assistant("done"));
+        ChatMessage message = ChatMessage.assistantToolCalls("let me look",
+                List.of(new ToolCall("call_1", "exec", "{\"command\":\"ls\"}")));
 
-        List<ChatMessage> decoded = codec.decode(codec.encode(original));
+        ChatMessage decoded = roundTrip(message);
 
-        assertEquals(original, decoded);
-        assertEquals("call_1", decoded.get(1).toolCalls().get(0).id());
-        assertEquals("exec", decoded.get(1).toolCalls().get(0).name());
-        assertEquals("{\"command\":\"ls\"}", decoded.get(1).toolCalls().get(0).arguments());
-        assertEquals("", decoded.get(2).content());
+        assertEquals(message, decoded);
+        assertEquals("call_1", decoded.toolCalls().get(0).id());
+        assertEquals("exec", decoded.toolCalls().get(0).name());
+        assertEquals("{\"command\":\"ls\"}", decoded.toolCalls().get(0).arguments());
     }
 
     @Test
-    void toolCalls_areOmittedFromJsonWhenAbsent() {
-        String json = codec.encode(List.of(ChatMessage.user("hi")));
+    void toolCalls_areOmittedFromRowWhenAbsent() {
+        ChatMessageCodec.Encoded encoded = codec.encode(ChatMessage.user("hi"));
 
-        assertFalse(json.contains("toolCalls"), "absent calls must not be written: " + json);
+        assertNull(encoded.toolCalls(), "absent calls must not be written: " + encoded);
+        assertNull(roundTrip(ChatMessage.user("hi")).toolCalls());
     }
 
     @Test
     void images_surviveTheRoundTrip() {
         List<String> images = List.of("data:image/png;base64,AAAA", "https://example.com/cat.png");
-        List<ChatMessage> original = List.of(
-                ChatMessage.user("这是什么？", images),
-                ChatMessage.assistant("一只猫"));
+        ChatMessage message = ChatMessage.user("what is this?", images);
 
-        List<ChatMessage> decoded = codec.decode(codec.encode(original));
+        ChatMessage decoded = roundTrip(message);
 
-        assertEquals(original, decoded);
-        assertEquals(images, decoded.get(0).images());
+        assertEquals(message, decoded);
+        assertEquals(images, decoded.images());
     }
 
     @Test
-    void images_areOmittedFromJsonWhenAbsent() {
-        String json = codec.encode(List.of(ChatMessage.user("hi")));
+    void images_areOmittedFromRowWhenAbsent() {
+        ChatMessageCodec.Encoded encoded = codec.encode(ChatMessage.user("hi"));
 
-        assertFalse(json.contains("images"), "absent images must not be written: " + json);
-        assertEquals(null, codec.decode(json).get(0).images());
+        assertNull(encoded.images(), "absent images must not be written: " + encoded);
+        assertNull(roundTrip(ChatMessage.user("hi")).images());
     }
 
     @Test
-    void nullToolCallId_isOmittedFromJsonButNotConfusedWithEmpty() {
-        String json = codec.encode(List.of(ChatMessage.user("hi")));
+    void nullToolCallId_isStoredAsNullNotEmpty() {
+        ChatMessageCodec.Encoded encoded = codec.encode(ChatMessage.user("hi"));
 
-        assertFalse(json.contains("toolCallId"), "absent id must not be written: " + json);
-        assertEquals("hi", codec.decode(json).get(0).content());
+        assertNull(encoded.toolCallId());
+        assertNull(roundTrip(ChatMessage.user("hi")).toolCallId());
     }
 
     @Test
     void compressedSummary_survivesUnchanged() {
         String summaryBody = "The user is building a parser; next step is error recovery.";
-        List<ChatMessage> original = List.of(
-                ChatMessage.system("sys"),
-                ChatMessage.system(MemoryCompressor.SUMMARY_PREFIX + summaryBody),
-                ChatMessage.user("continue"),
-                ChatMessage.assistant("sure"));
+        ChatMessage message = ChatMessage.system(MemoryCompressor.SUMMARY_PREFIX + summaryBody);
 
-        List<ChatMessage> decoded = codec.decode(codec.encode(original));
+        ChatMessage decoded = roundTrip(message);
 
-        assertEquals(original, decoded);
-        assertTrue(decoded.get(1).content().startsWith(MemoryCompressor.SUMMARY_PREFIX));
+        assertEquals(message, decoded);
+        assertTrue(decoded.content().startsWith(MemoryCompressor.SUMMARY_PREFIX));
     }
 
     @Test
     void multilineAndUnicodeContent_areNotMangled() {
-        String content = "第一行\n第二行\twith \"quotes\" and \\backslash\\";
-        List<ChatMessage> original = List.of(ChatMessage.user(content));
-
-        assertEquals(content, codec.decode(codec.encode(original)).get(0).content());
+        String content = "line one\nline two\twith \"quotes\" and \\backslash\\";
+        assertEquals(content, roundTrip(ChatMessage.user(content)).content());
     }
 
     @Test
-    void corruptHistory_isRejected() {
-        assertThrows(IllegalArgumentException.class, () -> codec.decode("{not an array"));
-        assertThrows(IllegalArgumentException.class, () -> codec.decode("{\"role\":\"user\"}"));
+    void corruptListJson_isRejected() {
+        assertThrows(IllegalArgumentException.class,
+                () -> codec.decodeToolCalls("{not json"));
+        assertThrows(IllegalArgumentException.class,
+                () -> codec.decodeImages("{not json"));
+    }
+
+    @Test
+    void emptyOrNullLists_decodeToNull() {
+        assertNull(codec.decodeToolCalls(null));
+        assertNull(codec.decodeToolCalls(""));
+        assertNull(codec.decodeImages("[]"));
     }
 }

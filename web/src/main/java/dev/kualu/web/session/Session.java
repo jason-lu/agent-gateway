@@ -14,11 +14,17 @@ public final class Session {
     private final String owner;
     private final Instant createdAt;
     private final ConversationMemory memory;
+    private volatile String title;
 
     public Session(String id, String owner, Instant createdAt, ConversationMemory memory) {
+        this(id, owner, createdAt, null, memory);
+    }
+
+    public Session(String id, String owner, Instant createdAt, String title, ConversationMemory memory) {
         this.id = Objects.requireNonNull(id, "id");
         this.owner = Objects.requireNonNull(owner, "owner");
         this.createdAt = Objects.requireNonNull(createdAt, "createdAt");
+        this.title = title;
         this.memory = Objects.requireNonNull(memory, "memory");
     }
 
@@ -32,6 +38,15 @@ public final class Session {
 
     public Instant createdAt() {
         return createdAt;
+    }
+
+    /** Short human label for listings; {@code null} until derived from the conversation. */
+    public String title() {
+        return title;
+    }
+
+    public void setTitle(String title) {
+        this.title = title;
     }
 
     public ConversationMemory memory() {

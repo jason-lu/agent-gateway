@@ -13,7 +13,7 @@ public final class ApiDtos {
     public record CreateSessionRequest(String systemPrompt) {
     }
 
-    public record SessionResponse(String id, String owner, String createdAt, int messageCount) {
+    public record SessionResponse(String id, String owner, String title, String createdAt, int messageCount) {
     }
 
     public record MessageResponse(String reply) {

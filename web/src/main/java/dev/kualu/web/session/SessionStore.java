@@ -17,7 +17,20 @@ public interface SessionStore {
 
     boolean delete(String owner, String sessionId);
 
-    Session update(Session session);
+    /**
+     * Persists the messages the store has not seen yet (the turn's fast path —
+     * appends rows, never rewrites older ones) and the title if not yet stored.
+     * Self-healing: covers whatever suffix is missing, so a retry after a failed
+     * persist picks up where the store left off. A no-op for a deleted session.
+     */
+    void appendMessages(Session session);
+
+    /**
+     * Rewrites the whole message list, replacing stored rows. Required when
+     * history was reshuffled in the middle (memory compression moves the fold
+     * marker), which invalidates positional appends.
+     */
+    void replaceMessages(Session session);
 
     /**
      * Content of an externally stored image (a {@code data:} URI). Stores that

@@ -73,7 +73,7 @@ class ChatServiceConcurrencyTest {
         InMemorySessionStore store = new InMemorySessionStore();
         Session session = store.create("ada", null);
         assertTrue(store.delete("ada", session.id()));
-        store.update(session);
+        store.appendMessages(session);
         assertTrue(store.find("ada", session.id()).isEmpty());
     }
 

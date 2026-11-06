@@ -12,6 +12,7 @@ import java.time.Instant;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -21,12 +22,10 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Verifies the SQL this store issues. Row mapping and real round-trips need a live
- * PostgreSQL — see the spec's T7 for the integration suite.
+ * Verifies the SQL this store issues (shape and scoping). Row mapping and real
+ * round-trips need a live PostgreSQL — see {@code PostgresPersistenceIntegrationTest}.
  */
 class PostgresSessionStoreTest {
-
-    private static final String SUMMARY = "【历史对话摘要】user is building a parser";
 
     private final JdbcTemplate jdbc = mock(JdbcTemplate.class);
     private final PostgresSessionStore store =
@@ -40,74 +39,99 @@ class PostgresSessionStoreTest {
 
     /** Everything the store reads or writes must be scoped to a single owner. */
     @Test
-    void everyStatement_isScopedToTheOwner() {
-        // SQL placeholders run (id, owner), so the bind order is sessionId first.
+    void findListAndDelete_areScopedToTheOwner() {
         when(jdbc.query(anyString(), mapper(), eq("sid-1"), eq("ada"))).thenReturn(List.of());
-        when(jdbc.query(anyString(), mapper(), eq("ada"))).thenReturn(List.of());
+        when(jdbc.query(anyString(), any(RowMapper.class), eq("ada"))).thenReturn(List.of());
         when(jdbc.update(anyString(), eq("sid-1"), eq("ada"))).thenReturn(1);
-        when(jdbc.update(anyString(), any(), eq("sid-1"), eq("ada"))).thenReturn(1);
 
         store.find("ada", "sid-1");
         store.listByOwner("ada");
         store.delete("ada", "sid-1");
-        store.update(new Session("sid-1", "ada", Instant.now(), new ConversationMemory()));
 
         ArgumentCaptor<String> findSql = ArgumentCaptor.forClass(String.class);
         verify(jdbc).query(findSql.capture(), mapper(), eq("sid-1"), eq("ada"));
         assertTrue(findSql.getValue().contains("owner = ?"), findSql.getValue());
 
         ArgumentCaptor<String> listSql = ArgumentCaptor.forClass(String.class);
-        verify(jdbc).query(listSql.capture(), mapper(), eq("ada"));
-        assertTrue(listSql.getValue().contains("where owner = ?"), listSql.getValue());
-        assertTrue(listSql.getValue().contains("order by created_at desc"), listSql.getValue());
+        verify(jdbc).query(listSql.capture(), any(RowMapper.class), eq("ada"));
+        assertTrue(listSql.getValue().contains("where s.owner = ?"), listSql.getValue());
+        assertTrue(listSql.getValue().contains("order by s.created_at desc"), listSql.getValue());
+        assertTrue(listSql.getValue().contains("message_count"), listSql.getValue());
+        assertFalse(listSql.getValue().contains("content"),
+                "a listing must not fetch the payload: " + listSql.getValue());
 
         ArgumentCaptor<String> deleteSql = ArgumentCaptor.forClass(String.class);
         verify(jdbc).update(deleteSql.capture(), eq("sid-1"), eq("ada"));
         assertTrue(deleteSql.getValue().contains("owner = ?"), deleteSql.getValue());
-
-        ArgumentCaptor<String> updateSql = ArgumentCaptor.forClass(String.class);
-        verify(jdbc).update(updateSql.capture(), any(), eq("sid-1"), eq("ada"));
-        assertTrue(updateSql.getValue().contains("where id = ?::uuid and owner = ?"), updateSql.getValue());
     }
 
     @Test
-    void create_writesTheSystemPromptAsTheFirstMessage() {
+    void create_writesTheSessionRowWithTheOwner() {
         store.create("ada", "be brief");
 
         ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
-        ArgumentCaptor<Object> values = ArgumentCaptor.forClass(Object.class);
-        verify(jdbc).update(sql.capture(), values.capture(), values.capture(), values.capture(), values.capture());
+        verify(jdbc).update(sql.capture(), anyString(), eq("ada"), any());
         assertTrue(sql.getValue().contains("insert into agent.sessions"), sql.getValue());
-
-        List<Object> args = values.getAllValues();
-        assertEquals("ada", args.get(1));
-        assertTrue(args.get(3).toString().contains("be brief"),
-                "the system prompt must land in the messages array: " + args.get(3));
     }
 
     @Test
     void create_skipsABlankSystemPrompt() {
         store.create("ada", "   ");
 
-        ArgumentCaptor<Object> values = ArgumentCaptor.forClass(Object.class);
-        verify(jdbc).update(anyString(), values.capture(), values.capture(), values.capture(), values.capture());
-        assertEquals("[]", values.getAllValues().get(3));
+        List<String> updateSqls = updateCalls();
+        assertEquals(1, updateSqls.size(), "only the session row insert may run: " + updateSqls);
+        assertFalse(updateSqls.get(0).contains("session_messages"),
+                "no message row for a blank system prompt: " + updateSqls.get(0));
     }
 
     @Test
-    void update_persistsTheCompressedSummaryVerbatim() {
-        Session session = new Session("sid-1", "ada", Instant.now(),
-                new ConversationMemory().replaceAll(List.of(
-                        ChatMessage.system("sys"),
-                        ChatMessage.system(SUMMARY),
-                        ChatMessage.user("go on"))));
-        when(jdbc.update(anyString(), any(), any(), any())).thenReturn(1);
+    void appendMessages_readsTheNextSeqAndInsertsAnOwnerScopedSuffix() {
+        Session session = new Session("sid-1", "ada", Instant.now(), new ConversationMemory().replaceAll(List.of(
+                ChatMessage.system("sys"),
+                ChatMessage.user("hi"))));
+        when(jdbc.queryForObject(anyString(), eq(Integer.class), eq("sid-1"), eq("ada"))).thenReturn(1);
 
-        store.update(session);
+        store.appendMessages(session);
 
-        ArgumentCaptor<Object> messages = ArgumentCaptor.forClass(Object.class);
-        verify(jdbc).update(anyString(), messages.capture(), any(), any());
-        assertTrue(messages.getValue().toString().contains(SUMMARY),
-                "the summary must round-trip untouched: " + messages.getValue());
+        ArgumentCaptor<String> seqSql = ArgumentCaptor.forClass(String.class);
+        verify(jdbc).queryForObject(seqSql.capture(), eq(Integer.class), eq("sid-1"), eq("ada"));
+        assertTrue(seqSql.getValue().contains("max(m.seq)"), seqSql.getValue());
+        assertTrue(seqSql.getValue().contains("s.owner = ?"), seqSql.getValue());
+
+        List<String> updateSqls = updateCalls();
+        assertEquals(1, updateSqls.size(), updateSqls::toString);
+        String insertSql = updateSqls.get(0);
+        assertTrue(insertSql.contains("insert into agent.session_messages"), insertSql);
+        assertTrue(insertSql.contains("unnest"), insertSql);
+        assertTrue(insertSql.contains("coalesce(title, ?)"), insertSql);
+        assertTrue(insertSql.contains("where s.id = ?::uuid and s.owner = ?"), insertSql);
+    }
+
+    @Test
+    void appendMessages_skipsTheInsertWhenNothingIsMissing() {
+        Session session = new Session("sid-1", "ada", Instant.now(), new ConversationMemory().replaceAll(List.of(
+                ChatMessage.user("hi"))));
+        when(jdbc.queryForObject(anyString(), eq(Integer.class), eq("sid-1"), eq("ada"))).thenReturn(1);
+
+        store.appendMessages(session);
+
+        assertEquals(List.of(), updateCalls(), "nothing new, nothing written");
+    }
+
+    /** SQL of every {@code update} issued against the mocked template, in order. */
+    private List<String> updateCalls() {
+        return org.mockito.Mockito.mockingDetails(jdbc).getInvocations().stream()
+                .filter(invocation -> "update".equals(invocation.getMethod().getName()))
+                .map(invocation -> (String) invocation.getArguments()[0])
+                .toList();
+    }
+
+    @Test
+    void replaceMessages_requiresADataSourceBackedTemplate() {
+        // The mock JdbcTemplate exposes no DataSource, so the rewrite path refuses
+        // to run un-transactionally. Real rewrites are covered by the integration test.
+        Session session = new Session("sid-1", "ada", Instant.now(), new ConversationMemory());
+        org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalStateException.class, () -> store.replaceMessages(session));
     }
 }

@@ -2,6 +2,8 @@ package dev.kualu.web.session;
 
 import tools.jackson.databind.ObjectMapper;
 import dev.kualu.llm.ChatMessage;
+import dev.kualu.llm.ToolCall;
+import dev.kualu.llm.memory.MemoryCompressor;
 import dev.kualu.web.auth.JdbcUserDetailsService;
 import dev.kualu.web.auth.JdbcUserSeeder;
 import dev.kualu.web.config.SecurityProperties;
@@ -34,7 +36,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class PostgresPersistenceIntegrationTest {
 
-    private static final String SUMMARY = "【历史对话摘要】user is building a parser";
+    private static final String SUMMARY = MemoryCompressor.SUMMARY_PREFIX + "user is building a parser";
 
     private static EmbeddedPostgres postgres;
     private static JdbcTemplate jdbc;
@@ -59,6 +61,13 @@ class PostgresPersistenceIntegrationTest {
     @BeforeEach
     void migrateFresh() {
         jdbc.execute("drop schema if exists agent cascade");
+        migrateToLatest();
+        new JdbcUserSeeder(jdbc, encoder).seed(List.of(
+                new SecurityProperties.User("ada", "ada-pw", List.of("USER")),
+                new SecurityProperties.User("bob", "bob-pw", List.of("USER"))));
+    }
+
+    private static void migrateToLatest() {
         Flyway.configure()
                 .dataSource(postgres.getPostgresDatabase())
                 .schemas("agent")
@@ -66,9 +75,6 @@ class PostgresPersistenceIntegrationTest {
                 .locations("classpath:db/migration")
                 .load()
                 .migrate();
-        new JdbcUserSeeder(jdbc, encoder).seed(List.of(
-                new SecurityProperties.User("ada", "ada-pw", List.of("USER")),
-                new SecurityProperties.User("bob", "bob-pw", List.of("USER"))));
     }
 
     // ---- users ----------------------------------------------------------
@@ -113,7 +119,7 @@ class PostgresPersistenceIntegrationTest {
     void crud_roundTripsThroughTheDatabase() {
         Session created = store.create("ada", "be brief");
         created.memory().addUser("hi").addAssistant("hello");
-        store.update(created);
+        store.appendMessages(created);
 
         Session found = store.find("ada", created.id()).orElseThrow();
         assertEquals(created.id(), found.id());
@@ -138,16 +144,70 @@ class PostgresPersistenceIntegrationTest {
     }
 
     @Test
+    void appendMessages_writesOnlyTheNewRowsInOrder() {
+        Session created = store.create("ada", null);
+        created.memory().addUser("first question");
+        store.appendMessages(created);
+        created.memory().addAssistant("first reply").addUser("second question");
+        store.appendMessages(created);
+
+        List<String> contents = jdbc.queryForList(
+                "select content from agent.session_messages where session_id = ?::uuid order by seq",
+                String.class, created.id());
+        assertEquals(List.of("first question", "first reply", "second question"), contents);
+
+        List<Integer> seqs = jdbc.queryForList(
+                "select seq from agent.session_messages where session_id = ?::uuid order by seq",
+                Integer.class, created.id());
+        assertEquals(List.of(0, 1, 2), seqs);
+    }
+
+    @Test
+    void appendMessages_selfHealsAGapLeftByAFailedWrite() {
+        Session created = store.create("ada", "sys");
+        created.memory().addUser("u1").addAssistant("a1");
+        store.appendMessages(created);
+        // Simulate a turn whose rows never landed (e.g. a failed persist).
+        jdbc.update("delete from agent.session_messages where session_id = ?::uuid and seq = 2",
+                created.id());
+        created.memory().addUser("u2");
+        store.appendMessages(created);
+
+        List<String> contents = jdbc.queryForList(
+                "select content from agent.session_messages where session_id = ?::uuid order by seq",
+                String.class, created.id());
+        assertEquals(List.of("sys", "u1", "a1", "u2"), contents,
+                "the missing suffix must be re-written, not skipped over");
+    }
+
+    @Test
+    void replaceMessages_rewritesTheWholeList() {
+        Session created = store.create("ada", "sys");
+        created.memory().replaceAll(List.of(
+                ChatMessage.system("sys"),
+                ChatMessage.system(SUMMARY),
+                ChatMessage.user("go on"),
+                ChatMessage.assistant("sure")));
+        store.replaceMessages(created);
+
+        Session reloaded = store.find("ada", created.id()).orElseThrow();
+        assertEquals(4, reloaded.messageCount());
+        assertEquals("sys", reloaded.memory().messages().get(0).content());
+        assertEquals(SUMMARY, reloaded.memory().messages().get(1).content());
+    }
+
+    @Test
     void imagesAreExternalizedAndResolved() {
         Session created = store.create("ada", null);
         created.memory().replaceAll(List.of(
                 ChatMessage.user("look at this", List.of("data:image/png;base64,AAAA"))));
-        store.update(created);
+        store.replaceMessages(created);
 
         String json = jdbc.queryForObject(
-                "select messages::text from agent.sessions where id = ?::uuid", String.class, created.id());
+                "select images::text from agent.session_messages where session_id = ?::uuid",
+                String.class, created.id());
         assertTrue(json.contains("ref:" + created.id() + "/"), json);
-        assertFalse(json.contains("AAAA"), "pixels must not live in the jsonb: " + json);
+        assertFalse(json.contains("AAAA"), "pixels must not live in the row: " + json);
 
         Session reloaded = store.find("ada", created.id()).orElseThrow();
         String ref = reloaded.memory().messages().get(0).images().get(0);
@@ -156,7 +216,7 @@ class PostgresPersistenceIntegrationTest {
                 store.findImageContent(created.id(), ImageRef.imageIdOf(ref)).orElseThrow());
 
         // Re-persisting the same image must not duplicate the row.
-        store.update(reloaded);
+        store.replaceMessages(reloaded);
         Integer rows = jdbc.queryForObject(
                 "select count(*) from agent.session_images where session_id = ?::uuid",
                 Integer.class, created.id());
@@ -170,50 +230,43 @@ class PostgresPersistenceIntegrationTest {
     }
 
     @Test
-    void backfillMigration_externalizesLegacyInlineImages() throws Exception {
-        String sessionId = UUID.randomUUID().toString();
-        String legacyImage = "data:image/png;base64,AAAA";
-        jdbc.update(
-                "insert into agent.sessions (id, owner, created_at, messages) values (?::uuid, ?, now(), ?::jsonb)",
-                sessionId, "ada",
-                "[{\"role\":\"user\",\"content\":\"look\",\"images\":[\"" + legacyImage + "\"]}]");
+    void title_isFilledOnceAndCarriedIntoListings() {
+        Session created = store.create("ada", null);
+        created.memory().addUser("help me with the parser");
+        created.setTitle("help me with the parser");
+        store.appendMessages(created);
 
-        // Replaying the shipped script (Flyway already ran it on an empty table)
-        // must migrate legacy rows and stay idempotent.
-        String script = new String(
-                getClass().getClassLoader()
-                        .getResourceAsStream("db/migration/V5__externalize_session_images.sql")
-                        .readAllBytes(),
-                StandardCharsets.UTF_8);
-        jdbc.execute(script);
+        created.setTitle("a later, worse title");
+        created.memory().addAssistant("sure");
+        store.appendMessages(created);
 
-        String json = jdbc.queryForObject(
-                "select messages::text from agent.sessions where id = ?::uuid", String.class, sessionId);
-        assertTrue(json.contains("ref:" + sessionId + "/"), json);
-        assertFalse(json.contains("AAAA"), "pixels must be gone from the jsonb: " + json);
+        Session reloaded = store.find("ada", created.id()).orElseThrow();
+        assertEquals("help me with the parser", reloaded.title(), "the title is fill-once");
 
-        Session reloaded = store.find("ada", sessionId).orElseThrow();
-        String ref = reloaded.memory().messages().get(0).images().get(0);
-        assertEquals(sha256Hex(legacyImage), ImageRef.imageIdOf(ref),
-                "the migration must hash like the Java-side externalisation");
-        assertEquals(legacyImage,
-                store.findImageContent(sessionId, ImageRef.imageIdOf(ref)).orElseThrow());
+        var summaries = store.listByOwner("ada");
+        assertEquals("help me with the parser", summaries.get(0).title());
+        assertEquals(2, summaries.get(0).messageCount());
     }
 
-    private static String sha256Hex(String content) {
-        try {
-            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                    .digest(content.getBytes(StandardCharsets.UTF_8)));
-        } catch (NoSuchAlgorithmException ex) {
-            throw new IllegalStateException(ex);
-        }
+    @Test
+    void deletedSession_appendMessagesStaysANoOp() {
+        Session created = store.create("ada", null);
+        created.memory().addUser("hi");
+        assertTrue(store.delete("ada", created.id()));
+
+        store.appendMessages(created);
+
+        assertFalse(store.find("ada", created.id()).isPresent());
+        assertEquals(0, (int) jdbc.queryForObject(
+                "select count(*) from agent.session_messages where session_id = ?::uuid",
+                Integer.class, created.id()));
     }
 
     @Test
     void historySurvivesRestart() {
         Session created = store.create("ada", null);
         created.memory().addUser("remember me").addAssistant("I will");
-        store.update(created);
+        store.appendMessages(created);
 
         // A brand new store = the process restarted; the row must still be readable.
         PostgresSessionStore afterRestart = new PostgresSessionStore(jdbc, new ChatMessageCodec(new ObjectMapper()));
@@ -221,32 +274,6 @@ class PostgresPersistenceIntegrationTest {
 
         assertEquals("remember me", reloaded.memory().messages().get(0).content());
         assertEquals("I will", reloaded.memory().messages().get(1).content());
-    }
-
-    @Test
-    void compressedSummarySurvivesVerbatim() {
-        Session created = store.create("ada", "sys");
-        created.memory().replaceAll(List.of(
-                ChatMessage.system("sys"),
-                ChatMessage.system(SUMMARY),
-                ChatMessage.user("go on"),
-                ChatMessage.assistant("sure")));
-        store.update(created);
-
-        Session reloaded = store.find("ada", created.id()).orElseThrow();
-        assertEquals("sys", reloaded.memory().messages().get(0).content());
-        assertEquals(SUMMARY, reloaded.memory().messages().get(1).content());
-    }
-
-    @Test
-    void updateDoesNotResurrectADeletedSession() {
-        Session created = store.create("ada", null);
-        created.memory().addUser("hi");
-        assertTrue(store.delete("ada", created.id()));
-
-        store.update(created);
-
-        assertFalse(store.find("ada", created.id()).isPresent());
     }
 
     @Test
@@ -258,13 +285,104 @@ class PostgresPersistenceIntegrationTest {
     @Test
     void memoryWithToolTurnsRoundTrips() {
         Session created = store.create("ada", null);
-        created.memory().addUser("run ls").addTool("file1\nfile2", "call_abc");
-        store.update(created);
+        created.memory().addUser("run ls");
+        created.memory().replaceAll(List.of(
+                ChatMessage.user("run ls"),
+                ChatMessage.assistantToolCalls("let me look",
+                        List.of(new ToolCall("call_abc", "exec", "{\"command\":\"ls\"}"))),
+                ChatMessage.tool("file1\nfile2", "call_abc")));
+        store.replaceMessages(created);
 
         Session reloaded = store.find("ada", created.id()).orElseThrow();
         List<ChatMessage> messages = reloaded.memory().messages();
-        assertEquals(2, messages.size());
-        assertEquals("call_abc", messages.get(1).toolCallId());
-        assertEquals("tool", messages.get(1).role());
+        assertEquals(3, messages.size());
+        assertEquals("call_abc", messages.get(1).toolCalls().get(0).id());
+        assertEquals("call_abc", messages.get(2).toolCallId());
+        assertEquals("tool", messages.get(2).role());
+    }
+
+    // ---- migration ------------------------------------------------------
+
+    @Test
+    void legacyUpgrade_movesMessagesIntoRowsAndBackfillsTitles() {
+        // Stand on the pre-split schema (V1..V3): messages still lives in one jsonb.
+        jdbc.execute("drop schema if exists agent cascade");
+        Flyway.configure()
+                .dataSource(postgres.getPostgresDatabase())
+                .schemas("agent")
+                .defaultSchema("agent")
+                .locations("classpath:db/migration")
+                .target(org.flywaydb.core.api.MigrationVersion.fromVersion("3"))
+                .load()
+                .migrate();
+        new JdbcUserSeeder(jdbc, encoder).seed(List.of(
+                new SecurityProperties.User("ada", "ada-pw", List.of("USER"))));
+
+        String sessionId = UUID.randomUUID().toString();
+        String legacyImage = "data:image/png;base64,AAAA";
+        jdbc.update(
+                "insert into agent.sessions (id, owner, created_at, messages) values (?::uuid, ?, now(), ?::jsonb)",
+                sessionId, "ada",
+                "[" +
+                        "{\"role\":\"system\",\"content\":\"be brief\"}," +
+                        "{\"role\":\"user\",\"content\":\"look at this project layout\"," +
+                        " \"images\":[\"" + legacyImage + "\"]}," +
+                        "{\"role\":\"assistant\",\"content\":\"\",\"toolCalls\":" +
+                        "[{\"id\":\"call_1\",\"name\":\"exec\",\"arguments\":\"{\\\"command\\\":\\\"ls\\\"}\"}]}," +
+                        "{\"role\":\"tool\",\"content\":\"src\\ntest\",\"toolCallId\":\"call_1\"}" +
+                        "]");
+
+        // The real upgrade path: V4 + V5 externalise inline images, V6 splits the table.
+        migrateToLatest();
+
+        List<String> roles = jdbc.queryForList(
+                "select role from agent.session_messages where session_id = ?::uuid order by seq",
+                String.class, sessionId);
+        assertEquals(List.of("system", "user", "assistant", "tool"), roles);
+
+        String images = jdbc.queryForObject(
+                "select images::text from agent.session_messages where session_id = ?::uuid and seq = 1",
+                String.class, sessionId);
+        assertTrue(images.contains("ref:" + sessionId + "/"), images);
+        assertFalse(images.contains("AAAA"), "V5 must have externalised the pixels before V6 moved the row: " + images);
+
+        String toolCalls = jdbc.queryForObject(
+                "select tool_calls::text from agent.session_messages where session_id = ?::uuid and seq = 2",
+                String.class, sessionId);
+        assertTrue(toolCalls.contains("call_1"), toolCalls);
+
+        String toolCallId = jdbc.queryForObject(
+                "select tool_call_id from agent.session_messages where session_id = ?::uuid and seq = 3",
+                String.class, sessionId);
+        assertEquals("call_1", toolCallId);
+
+        String title = jdbc.queryForObject(
+                "select title from agent.sessions where id = ?::uuid", String.class, sessionId);
+        assertEquals("look at this project layout", title, "title backfills from the first user message");
+
+        assertFalse(tableExists("agent.sessions", "messages"), "the jsonb column must be gone");
+
+        Session reloaded = store.find("ada", sessionId).orElseThrow();
+        String ref = reloaded.memory().messages().get(1).images().get(0);
+        assertEquals(sha256Hex(legacyImage), ImageRef.imageIdOf(ref),
+                "the migration must hash like the Java-side externalisation");
+        assertEquals(legacyImage,
+                store.findImageContent(sessionId, ImageRef.imageIdOf(ref)).orElseThrow());
+    }
+
+    private static boolean tableExists(String table, String column) {
+        Integer count = jdbc.queryForObject(
+                "select count(*) from information_schema.columns where table_name = ? and column_name = ?",
+                Integer.class, table.substring(table.indexOf('.') + 1), column);
+        return count != null && count > 0;
+    }
+
+    private static String sha256Hex(String content) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(content.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException(ex);
+        }
     }
 }

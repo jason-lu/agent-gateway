@@ -7,5 +7,5 @@ import java.time.Instant;
  * the conversation payload. Loading every session's messages just to render a
  * list is what made first access slow.
  */
-public record SessionSummary(String id, String owner, Instant createdAt, int messageCount) {
+public record SessionSummary(String id, String owner, Instant createdAt, String title, int messageCount) {
 }

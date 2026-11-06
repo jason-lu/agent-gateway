@@ -12,11 +12,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * {@code ChatMessage} ↔ JSON for the {@code messages jsonb} column.
+ * {@code ChatMessage} ↔ the {@code agent.session_messages} row columns.
  *
  * <p>Field mapping is written out rather than left to bean introspection:
  * {@link ChatMessage} is a record with an extra convenience constructor, and a
  * persistence boundary should not depend on which one a mapper happens to pick.
+ * {@code role}/{@code content}/{@code toolCallId} are plain columns; the two
+ * list fields ({@code toolCalls}, {@code images}) are JSON documents.
  */
 public final class ChatMessageCodec {
 
@@ -26,82 +28,95 @@ public final class ChatMessageCodec {
         this.mapper = mapper;
     }
 
-    /** @return a JSON array; {@code toolCallId}, {@code toolCalls} and {@code images} are omitted when absent */
-    public String encode(List<ChatMessage> messages) {
+    /** One message as row values; the two list fields are JSON text or {@code null}. */
+    public record Encoded(String role, String content, String toolCallId, String toolCalls, String images) {
+    }
+
+    public Encoded encode(ChatMessage message) {
+        return new Encoded(
+                message.role(),
+                message.content(),
+                message.toolCallId(),
+                encodeToolCalls(message.toolCalls()),
+                encodeImages(message.images()));
+    }
+
+    public ChatMessage decode(Encoded row) {
+        return new ChatMessage(
+                row.role(),
+                row.content(),
+                row.toolCallId(),
+                decodeToolCalls(row.toolCalls()),
+                decodeImages(row.images()));
+    }
+
+    /** @return JSON array of {@code {id, name, arguments}} objects; {@code null} when absent */
+    String encodeToolCalls(List<ToolCall> calls) {
+        if (calls == null || calls.isEmpty()) {
+            return null;
+        }
         ArrayNode array = mapper.createArrayNode();
-        for (ChatMessage message : messages) {
+        for (ToolCall call : calls) {
             ObjectNode node = array.addObject();
-            node.put("role", message.role());
-            node.put("content", message.content());
-            if (message.toolCallId() != null) {
-                node.put("toolCallId", message.toolCallId());
-            }
-            if (message.toolCalls() != null) {
-                ArrayNode calls = node.putArray("toolCalls");
-                for (ToolCall call : message.toolCalls()) {
-                    ObjectNode callNode = calls.addObject();
-                    callNode.put("id", call.id());
-                    callNode.put("name", call.name());
-                    callNode.put("arguments", call.arguments());
-                }
-            }
-            if (message.images() != null) {
-                ArrayNode images = node.putArray("images");
-                for (String image : message.images()) {
-                    images.add(image);
-                }
-            }
+            node.put("id", call.id());
+            node.put("name", call.name());
+            node.put("arguments", call.arguments());
         }
         return array.toString();
     }
 
-    public List<ChatMessage> decode(String json) {
-        JsonNode root;
-        try {
-            root = mapper.readTree(json);
-        } catch (JacksonException ex) {
-            throw new IllegalArgumentException("corrupt message history", ex);
-        }
-        if (!root.isArray()) {
-            throw new IllegalArgumentException("corrupt message history: expected a JSON array");
-        }
-        List<ChatMessage> messages = new ArrayList<>(root.size());
-        for (JsonNode node : root) {
-            String toolCallId = node.hasNonNull("toolCallId") ? node.get("toolCallId").asText() : null;
-            messages.add(new ChatMessage(
-                    node.get("role").asText(),
-                    node.get("content").asText(),
-                    toolCallId,
-                    decodeToolCalls(node.get("toolCalls")),
-                    decodeImages(node.get("images"))));
-        }
-        return List.copyOf(messages);
-    }
-
-    /** @return {@code null} when the node is absent or carries no calls */
-    private static List<ToolCall> decodeToolCalls(JsonNode callsNode) {
-        if (callsNode == null || !callsNode.isArray() || callsNode.size() == 0) {
+    /** @return {@code null} when the JSON is absent or carries no calls */
+    List<ToolCall> decodeToolCalls(String json) {
+        if (json == null || json.isBlank()) {
             return null;
         }
-        List<ToolCall> calls = new ArrayList<>(callsNode.size());
-        for (JsonNode callNode : callsNode) {
+        JsonNode root = parse(json, "toolCalls");
+        if (!root.isArray() || root.isEmpty()) {
+            return null;
+        }
+        List<ToolCall> calls = new ArrayList<>(root.size());
+        for (JsonNode node : root) {
             calls.add(new ToolCall(
-                    callNode.get("id").asText(),
-                    callNode.get("name").asText(),
-                    callNode.get("arguments").asText()));
+                    node.get("id").asText(),
+                    node.get("name").asText(),
+                    node.get("arguments").asText()));
         }
         return List.copyOf(calls);
     }
 
-    /** @return {@code null} when the node is absent or carries no images */
-    private static List<String> decodeImages(JsonNode imagesNode) {
-        if (imagesNode == null || !imagesNode.isArray() || imagesNode.size() == 0) {
+    /** @return JSON array of image strings; {@code null} when absent */
+    String encodeImages(List<String> images) {
+        if (images == null || images.isEmpty()) {
             return null;
         }
-        List<String> images = new ArrayList<>(imagesNode.size());
-        for (JsonNode imageNode : imagesNode) {
-            images.add(imageNode.asText());
+        ArrayNode array = mapper.createArrayNode();
+        for (String image : images) {
+            array.add(image);
+        }
+        return array.toString();
+    }
+
+    /** @return {@code null} when the JSON is absent or carries no images */
+    List<String> decodeImages(String json) {
+        if (json == null || json.isBlank()) {
+            return null;
+        }
+        JsonNode root = parse(json, "images");
+        if (!root.isArray() || root.isEmpty()) {
+            return null;
+        }
+        List<String> images = new ArrayList<>(root.size());
+        for (JsonNode node : root) {
+            images.add(node.asText());
         }
         return List.copyOf(images);
+    }
+
+    private JsonNode parse(String json, String field) {
+        try {
+            return mapper.readTree(json);
+        } catch (JacksonException ex) {
+            throw new IllegalArgumentException("corrupt message history: bad " + field, ex);
+        }
     }
 }

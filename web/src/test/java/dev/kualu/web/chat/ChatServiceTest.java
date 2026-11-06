@@ -217,7 +217,7 @@ class ChatServiceTest {
     void persistFailure_doesNotCostTheUserTheReply() {
         InMemorySessionStore store = new InMemorySessionStore() {
             @Override
-            public Session update(Session session) {
+            public void appendMessages(Session session) {
                 throw new org.springframework.dao.DataAccessResourceFailureException("database gone");
             }
         };
@@ -229,6 +229,19 @@ class ChatServiceTest {
         // The reply is already produced; a failed write must not turn it into an error.
         assertEquals("REPLY", service.chat(session, "new question", null));
         assertEquals(2, session.messageCount());
+    }
+
+    @Test
+    void chat_derivesTheListingTitleFromTheFirstUserMessage() {
+        InMemorySessionStore store = new InMemorySessionStore();
+        Session session = store.create("ada", null);
+        RecordingLlm llm = new RecordingLlm();
+        ChatService service = new ChatService(
+                store, clientProvider(llm), emptyCompressorProvider(), configuredProperties(), List.of(), emptyMcpProvider(), testMetrics(), Runnable::run);
+
+        service.chat(session, "  帮我看看\n这个项目结构  ", null);
+
+        assertEquals("帮我看看 这个项目结构", session.title());
     }
 
     @SuppressWarnings("unchecked")

@@ -57,7 +57,8 @@ public class InMemorySessionStore implements SessionStore {
                 .filter(session -> session.owner().equals(owner))
                 .sorted(Comparator.comparing(Session::createdAt).reversed())
                 .map(session -> new SessionSummary(
-                        session.id(), session.owner(), session.createdAt(), session.messageCount()))
+                        session.id(), session.owner(), session.createdAt(), session.title(),
+                        session.messageCount()))
                 .toList();
     }
 
@@ -71,10 +72,13 @@ public class InMemorySessionStore implements SessionStore {
     }
 
     @Override
-    public Session update(Session session) {
-        // Do not resurrect a session deleted while a chat turn was in flight.
-        sessions.computeIfPresent(session.id(), (id, existing) ->
-                existing.owner().equals(session.owner()) ? session : existing);
-        return session;
+    public void appendMessages(Session session) {
+        // The in-memory session *is* the payload; nothing to flush. Never
+        // resurrect a session deleted while a chat turn was in flight.
+    }
+
+    @Override
+    public void replaceMessages(Session session) {
+        // Same as appendMessages: history lives in the session object itself.
     }
 }

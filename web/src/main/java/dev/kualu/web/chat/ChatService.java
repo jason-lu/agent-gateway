@@ -43,6 +43,9 @@ import java.util.function.Supplier;
 public class ChatService {
     private static final Logger log = LoggerFactory.getLogger(ChatService.class);
 
+    /** Listing titles stay one short line. */
+    private static final int TITLE_MAX_CHARS = 40;
+
     private final SessionStore sessionStore;
     private final LlmClient llmClient;
     private final MemoryCompressor compressor;
@@ -122,7 +125,7 @@ public class ChatService {
             try {
                 // The tool loop commits the user turn, any tool rounds, and the reply.
                 String reply = toolLoop.run(session.memory(), content, images);
-                persistQuietly(session);
+                persistAppendedQuietly(session);
                 scheduleCompress(session);
                 return reply;
             } catch (LlmException ex) {
@@ -136,14 +139,14 @@ public class ChatService {
         synchronized (session.memory()) {
             try {
                 String reply = toolLoop.run(session.memory(), content, images, onDelta);
-                persistQuietly(session);
+                persistAppendedQuietly(session);
                 scheduleCompress(session);
                 return reply;
             } catch (RuntimeException ex) {
                 // Mid-stream failure (client disconnect, emitter timeout, upstream cut):
                 // the tool loop has already committed whatever happened, so the turn
                 // survives instead of being lost.
-                persistQuietly(session);
+                persistAppendedQuietly(session);
                 throw ex instanceof LlmException llm
                         ? new UpstreamLlmException(llm.getMessage(), llm)
                         : ex;
@@ -202,7 +205,9 @@ public class ChatService {
             synchronized (session.memory()) {
                 fired = compressor.apply(session.memory(), plan, summary);
                 if (fired) {
-                    persistQuietly(session);
+                    // The fold marker moved mid-history: positional appends are
+                    // invalid now, so this persists the full reshuffled list.
+                    persistRewrittenQuietly(session);
                 }
             }
             summaryChars = summary == null ? 0 : Math.min(summary.length(), plan.maxTokens());
@@ -219,14 +224,47 @@ public class ChatService {
      * Durability must not cost the user an answer that was already produced: if the
      * write fails the turn stays in process memory and the failure is loud in the logs
      * (and visible via {@code health.dbUp}), rather than surfaced as an error.
+     * Appends are self-healing — the next persist writes whatever suffix is missing.
      */
-    private void persistQuietly(Session session) {
+    private void persistAppendedQuietly(Session session) {
         try {
-            sessionStore.update(session);
+            ensureTitle(session);
+            sessionStore.appendMessages(session);
         } catch (RuntimeException ex) {
             log.warn("session-persist failed for session={}; the turn is kept in memory but is not durable",
                     session.id(), ex);
         }
+    }
+
+    private void persistRewrittenQuietly(Session session) {
+        try {
+            ensureTitle(session);
+            sessionStore.replaceMessages(session);
+        } catch (RuntimeException ex) {
+            log.warn("session-rewrite failed for session={}; stored history keeps the pre-fold order",
+                    session.id(), ex);
+        }
+    }
+
+    /** Derives the listing title from the first user message exactly once per session. */
+    private void ensureTitle(Session session) {
+        if (session.title() != null) {
+            return;
+        }
+        synchronized (session.memory()) {
+            if (session.title() != null) {
+                return;
+            }
+            session.memory().messages().stream()
+                    .filter(message -> "user".equals(message.role()) && !message.content().isBlank())
+                    .findFirst()
+                    .ifPresent(message -> session.setTitle(deriveTitle(message.content())));
+        }
+    }
+
+    private static String deriveTitle(String firstUserMessage) {
+        String oneLine = firstUserMessage.replaceAll("\\s+", " ").trim();
+        return oneLine.length() <= TITLE_MAX_CHARS ? oneLine : oneLine.substring(0, TITLE_MAX_CHARS);
     }
 
     private void requireLlm() {
