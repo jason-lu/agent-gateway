@@ -151,7 +151,10 @@ public final class ToolLoop {
                 turns.add(assistant);
                 payload.add(assistant);
                 for (ToolCall call : turn.toolCalls()) {
-                    ChatMessage result = ChatMessage.tool(executeTool(toolSet, call), call.id());
+                    long toolStart = System.nanoTime();
+                    String output = executeTool(toolSet, call);
+                    TurnTimings.recordTool(call.name(), (System.nanoTime() - toolStart) / 1_000_000);
+                    ChatMessage result = ChatMessage.tool(output, call.id());
                     turns.add(result);
                     payload.add(result);
                 }

@@ -146,6 +146,9 @@ class ToolLoopTest {
             assertEquals(2, timings.llmRounds());
             assertTrue(timings.llmMs() >= 0);
             assertEquals(-1, timings.llmTtftMs(), "non-streamed turns carry no ttft");
+            assertEquals(1, timings.toolCalls());
+            assertTrue(timings.toolMs() >= 0);
+            assertEquals(1, timings.toolBreakdown().get("exec")[0]);
         } finally {
             TurnTimings.clear();
         }

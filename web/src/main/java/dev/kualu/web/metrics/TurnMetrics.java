@@ -54,6 +54,13 @@ public class TurnMetrics {
                 timer("agent.turn.llm.ttft", tag).record(Duration.ofMillis(timings.llmTtftMs()));
             }
         }
+        if (timings.toolCalls() > 0) {
+            timer("agent.turn.tools", tag).record(Duration.ofMillis(timings.toolMs()));
+            summary("agent.turn.tools.count", tag).record(timings.toolCalls());
+            timings.toolBreakdown().forEach((name, entry) ->
+                    registry.timer("agent.turn.tool", "endpoint", endpoint, "tool", name)
+                            .record(Duration.ofMillis(entry[1])));
+        }
         if (timings.hasPersist()) {
             timer("agent.turn.persist", tag).record(Duration.ofMillis(timings.persistMs()));
             summary("agent.turn.payload.write", tag).record(timings.persistChars());

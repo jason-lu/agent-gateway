@@ -21,6 +21,8 @@ class TurnMetricsTest {
         TurnTimings.recordLlmRound(10);
         TurnTimings.recordLlmRound(20);
         TurnTimings.recordFirstDelta();
+        TurnTimings.recordTool("exec", 300);
+        TurnTimings.recordTool("exec", 200);
         TurnTimings.recordPersist(4, 5, 6000);
         TurnTimings.clear();
 
@@ -32,6 +34,10 @@ class TurnMetricsTest {
         assertNotNull(registry.find("agent.turn.llm").tag("endpoint", "send").timer());
         assertNotNull(registry.find("agent.turn.llm.ttft").tag("endpoint", "send").timer());
         assertNotNull(registry.find("agent.turn.persist").tag("endpoint", "send").timer());
+        assertNotNull(registry.find("agent.turn.tools").tag("endpoint", "send").timer());
+        assertNotNull(registry.find("agent.turn.tool").tag("tool", "exec").timer());
+        assertEquals(500, registry.get("agent.turn.tools").timer().totalTime(java.util.concurrent.TimeUnit.MILLISECONDS));
+        assertEquals(2, registry.get("agent.turn.tools.count").summary().totalAmount());
         assertEquals(2, registry.get("agent.turn.llm.rounds").summary().totalAmount());
         assertEquals(3000 + 6000,
                 registry.get("agent.turn.payload.read").summary().totalAmount()

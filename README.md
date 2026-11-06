@@ -134,10 +134,10 @@ Thresholds are validated at startup: `keep-messages >= 2` and `max-messages > ke
 Every request through `SessionController` emits one `turn-timing` INFO line with the per-segment cost of that turn:
 
 ```
-turn-timing endpoint=send session=<id> total=2280ms load=120ms(sql=15,decode=105,chars=2150400,count=340) list=- compress=skipped(0ms,summaryChars=0) llm=1800ms(ttft=450ms,rounds=2) persist=340ms(encode=120,write=220,chars=2252800)
+turn-timing endpoint=send session=<id> total=2280ms load=120ms(sql=15,decode=105,chars=2150400,count=340) list=- compress=skipped(0ms,summaryChars=0) llm=1800ms(ttft=450ms,rounds=2) tools=61000ms(count=2:exec=45000,mcp_fetch=16000) persist=340ms(encode=120,write=220,chars=2252800)
 ```
 
-Segments that did not run print as `-`. Payload sizes are in characters (JSON length), not bytes. The same segments are recorded into Micrometer (`agent.turn.total|load|list|compress|llm|llm.ttft|persist` timers, `agent.turn.payload.read|write`, `agent.turn.messages`, `agent.turn.llm.rounds` summaries) — tagged by `endpoint` only, never by session. Metrics are served at `/actuator/metrics` and health at `/actuator/health`; `/actuator/**` (except health) requires the `ADMIN` role.
+Segments that did not run print as `-`. Payload sizes are in characters (JSON length), not bytes. `tools` is the wall time of tool executions between model rounds (exec/MCP), aggregated per tool name — the gap between `total` and the segment sum is usually tools plus per-tool overhead. The same segments are recorded into Micrometer (`agent.turn.total|load|list|compress|llm|llm.ttft|tools|persist` timers, `agent.turn.tool` per tool name, `agent.turn.payload.read|write`, `agent.turn.messages`, `agent.turn.llm.rounds`, `agent.turn.tools.count` summaries) — tagged by `endpoint` (and `tool`) only, never by session. Metrics are served at `/actuator/metrics` and health at `/actuator/health`; `/actuator/**` (except health) requires the `ADMIN` role.
 
 Only the exact command names above are intercepted. Everything else is chat input — including absolute paths (`/usr/lib/jvm/jdk-21.0.5+11/bin/java`), fractions (`1/2`), and other text that contains `/`.
 

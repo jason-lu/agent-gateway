@@ -64,6 +64,28 @@ class TurnTimingsTest {
     }
 
     @Test
+    void toolsAreAggregatedPerName() {
+        TurnTimings timings = TurnTimings.begin();
+        TurnTimings.recordTool("exec", 300);
+        TurnTimings.recordTool("exec", 200);
+        TurnTimings.recordTool("mcp_fetch", 50);
+
+        assertEquals(3, timings.toolCalls());
+        assertEquals(550, timings.toolMs());
+        assertEquals(2, timings.toolBreakdown().get("exec")[0]);
+        assertEquals(500, timings.toolBreakdown().get("exec")[1]);
+
+        String line = timings.toLogLine();
+        assertTrue(line.contains("tools=550ms(count=3:exec=500,mcp_fetch=50)"), line);
+    }
+
+    @Test
+    void missingToolSegmentPrintsDash() {
+        TurnTimings timings = TurnTimings.begin();
+        assertTrue(timings.toLogLine().contains("tools=-"));
+    }
+
+    @Test
     void firstDeltaIsRecordedOnlyOnce() {
         TurnTimings timings = TurnTimings.begin();
         TurnTimings.recordFirstDelta();

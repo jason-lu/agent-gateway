@@ -40,6 +40,9 @@ public final class TurnTimings {
     private long persistWriteMs;
     private long persistChars;
 
+    /** tool name -> {count, total ms}. Linked for stable log order. */
+    private final java.util.Map<String, long[]> tools = new java.util.LinkedHashMap<>();
+
     private TurnTimings() {
     }
 
@@ -110,6 +113,15 @@ public final class TurnTimings {
         TurnTimings t = BOUND.get();
         if (t != null && t.llmTtftMs < 0) {
             t.llmTtftMs = (System.nanoTime() - t.startedNanos) / 1_000_000;
+        }
+    }
+
+    /** One tool execution inside the tool loop. */
+    public static void recordTool(String name, long ms) {
+        TurnTimings t = BOUND.get();
+        if (t != null) {
+            t.tools.merge(name, new long[] {1, ms},
+                    (a, b) -> new long[] {a[0] + b[0], a[1] + b[1]});
         }
     }
 
@@ -223,6 +235,29 @@ public final class TurnTimings {
         return persistChars;
     }
 
+    /** Total wall time of tool executions this turn. */
+    public long toolMs() {
+        long total = 0;
+        for (long[] entry : tools.values()) {
+            total += entry[1];
+        }
+        return total;
+    }
+
+    /** Number of tool executions this turn. */
+    public int toolCalls() {
+        int total = 0;
+        for (long[] entry : tools.values()) {
+            total += entry[0];
+        }
+        return total;
+    }
+
+    /** Per-tool aggregation for the turn: name to {@code {count, total ms}}. */
+    public java.util.Map<String, long[]> toolBreakdown() {
+        return java.util.Map.copyOf(tools);
+    }
+
     /** Single-line summary for structured logs; segments that did not run print as {@code -}. */
     public String toLogLine() {
         return "total=" + totalMs() + "ms"
@@ -235,8 +270,25 @@ public final class TurnTimings {
                 + " llm=" + (llmRounds > 0
                         ? llmMs + "ms(ttft=" + (llmTtftMs < 0 ? "-" : llmTtftMs + "ms") + ",rounds=" + llmRounds + ")"
                         : "-")
+                + " tools=" + toolsSegment()
                 + " persist=" + segment(persistRecorded, persistMs() + "ms(encode=" + persistEncodeMs
                         + ",write=" + persistWriteMs + ",chars=" + persistChars + ")");
+    }
+
+    private String toolsSegment() {
+        if (tools.isEmpty()) {
+            return "-";
+        }
+        StringBuilder body = new StringBuilder(toolMs() + "ms(count=" + toolCalls() + ":");
+        boolean first = true;
+        for (var entry : tools.entrySet()) {
+            if (!first) {
+                body.append(',');
+            }
+            first = false;
+            body.append(entry.getKey()).append('=').append(entry.getValue()[1]);
+        }
+        return body.append(')').toString();
     }
 
     private static String segment(boolean recorded, String body) {
