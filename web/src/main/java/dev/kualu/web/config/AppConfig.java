@@ -91,6 +91,12 @@ public class AppConfig {
     }
 
     @Bean
+    @ConditionalOnProperty(name = "agent.store", havingValue = "memory")
+    public dev.kualu.web.mcp.UserMcpServerStore inMemoryUserMcpServerStore() {
+        return new dev.kualu.web.mcp.InMemoryUserMcpServerStore();
+    }
+
+    @Bean
     public AuthenticationManager authenticationManager(AuthenticationConfiguration configuration) throws Exception {
         return configuration.getAuthenticationManager();
     }
@@ -218,6 +224,19 @@ public class AppConfig {
                 Duration.ofSeconds(properties.refreshSeconds()),
                 null,
                 tokenStores.getIfAvailable());
+    }
+
+    /**
+     * Per-user MCP managers: each user's own {@code agent.user_mcp_servers} entries
+     * become their own connections, so personal credentials never leak across users.
+     * Same feature flag as the shared layer — {@code agent.tools.mcp.enabled=false}
+     * turns MCP off entirely.
+     */
+    @Bean(destroyMethod = "close")
+    @ConditionalOnProperty(name = "agent.tools.mcp.enabled", havingValue = "true", matchIfMissing = true)
+    public dev.kualu.web.mcp.UserMcpRegistry userMcpRegistry(
+            dev.kualu.web.mcp.UserMcpServerStore store, McpProperties properties) {
+        return new dev.kualu.web.mcp.UserMcpRegistry(store, properties);
     }
 
     /** Inline yml entry; values are already placeholder-resolved by Spring. */

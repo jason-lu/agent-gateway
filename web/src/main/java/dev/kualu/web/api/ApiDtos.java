@@ -1,6 +1,7 @@
 package dev.kualu.web.api;
 
 import java.util.List;
+import java.util.Map;
 
 public final class ApiDtos {
 
@@ -26,6 +27,23 @@ public final class ApiDtos {
     }
 
     public record AdminUserResponse(String username, List<String> roles) {
+    }
+
+    /**
+     * One user-configured MCP server. {@code env}/{@code headers} values are masked
+     * ({@code ••••••••}) — real credentials never leave the server. {@code status} is
+     * {@code connected}, {@code disconnected}, {@code disabled} or {@code unknown}.
+     */
+    public record McpServerResponse(
+            String name,
+            String transport,
+            String command,
+            List<String> args,
+            Map<String, String> env,
+            String url,
+            Map<String, String> headers,
+            boolean enabled,
+            String status) {
     }
 
     public record ErrorResponse(int status, String error, String message) {

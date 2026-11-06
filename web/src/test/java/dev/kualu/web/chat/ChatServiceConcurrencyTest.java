@@ -42,7 +42,7 @@ class ChatServiceConcurrencyTest {
                 store,
                 provider(client),
                 emptyCompressorProvider(),
-                new LlmProperties("http://localhost", "key", "model", 90), List.of(), emptyMcpProvider(), testMetrics(), Runnable::run);
+                new LlmProperties("http://localhost", "key", "model", 90), List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
 
         int workers = 8;
         CountDownLatch start = new CountDownLatch(1);
@@ -91,6 +91,11 @@ class ChatServiceConcurrencyTest {
 
     @SuppressWarnings("unchecked")
     private static org.springframework.beans.factory.ObjectProvider<dev.kualu.mcp.McpConnectionManager> emptyMcpProvider() {
+        return mock(org.springframework.beans.factory.ObjectProvider.class);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static org.springframework.beans.factory.ObjectProvider<dev.kualu.web.mcp.UserMcpRegistry> emptyUserMcpProvider() {
         return mock(org.springframework.beans.factory.ObjectProvider.class);
     }
 }

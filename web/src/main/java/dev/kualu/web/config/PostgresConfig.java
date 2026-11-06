@@ -99,6 +99,12 @@ public class PostgresConfig {
         return new PostgresTokenStore(jdbc);
     }
 
+    @Bean
+    public dev.kualu.web.mcp.UserMcpServerStore userMcpServerStore(
+            JdbcTemplate jdbc, tools.jackson.databind.ObjectMapper objectMapper) {
+        return new dev.kualu.web.mcp.PostgresUserMcpServerStore(jdbc, objectMapper);
+    }
+
     /**
      * The database is often reachable over the public internet, so the URL must select a
      * TLS mode that cannot silently fall back to plaintext password auth. A deny-list is

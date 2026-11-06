@@ -188,6 +188,8 @@ The primary configuration is the ecosystem-standard **`mcp.json`** (Claude Deskt
 
 Tools are discovered at startup and refreshed on `notifications/tools/list_changed` and periodically; a dropped connection is retried with capped exponential backoff. Each tool is exposed to the model as `mcp_<server>_<tool>` (the original name is used when calling the server). Tool results are truncated to the output limit and failures come back to the model as `error: …` text instead of aborting the turn.
 
+**Per-user servers** — web users can also add their own MCP servers under 头像菜单 → 设置 → MCP 服务器 (`/api/v1/settings/mcp-servers`), stored per account in `agent.user_mcp_servers` (or in memory with `agent.store=memory`). Credentials are personal and never leave the owner's tool set; the API only ever returns them masked (`••••••••` — resubmit the mask to keep a stored value, clear a field to drop the key). User-defined HTTP servers authenticate with static headers only (no OAuth — that flow opens a browser on the host and stays an operator concern); stdio servers run as local child processes, same trust level as below. A user server with the same name as a `mcp.json` entry overrides it for that user's turns only.
+
 > **Security note:** MCP servers are third-party code. A stdio server runs as a **local child process** (same trust level as the exec tool) and a remote server receives **your credentials** — configure only servers you trust. Remote URLs are forced to HTTPS (loopback excepted) so tokens never cross the network in plaintext. Tool results are untrusted input to the model (prompt-injection surface). Keep `mcp.json` files with secrets out of version control.
 
 ## Run the web gateway

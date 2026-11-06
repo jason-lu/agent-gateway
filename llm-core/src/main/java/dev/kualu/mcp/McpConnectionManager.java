@@ -13,10 +13,12 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -134,13 +136,30 @@ public final class McpConnectionManager implements AutoCloseable {
 
     /** Snapshot of every tool from currently connected servers. */
     public List<AgentTool> tools() {
+        return toolsExcluding(Set.of());
+    }
+
+    /** Snapshot of every tool from currently connected servers, minus the named servers. */
+    public List<AgentTool> toolsExcluding(Set<String> excludedServers) {
         List<AgentTool> tools = new ArrayList<>();
-        for (ServerConnection connection : connections.values()) {
-            if (connection.connected()) {
-                tools.addAll(connection.tools);
+        for (Map.Entry<String, ServerConnection> entry : connections.entrySet()) {
+            if (excludedServers.contains(entry.getKey())) {
+                continue;
+            }
+            if (entry.getValue().connected()) {
+                tools.addAll(entry.getValue().tools);
             }
         }
         return List.copyOf(tools);
+    }
+
+    /** Server name → connection up? Covers every configured server, connected or not. */
+    public Map<String, Boolean> serverStates() {
+        Map<String, Boolean> states = new LinkedHashMap<>();
+        for (Map.Entry<String, ServerConnection> entry : connections.entrySet()) {
+            states.put(entry.getKey(), entry.getValue().connected());
+        }
+        return Collections.unmodifiableMap(states);
     }
 
     private void connect(ServerConnection connection) {

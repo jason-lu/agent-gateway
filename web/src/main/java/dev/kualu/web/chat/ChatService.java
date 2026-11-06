@@ -9,6 +9,7 @@ import dev.kualu.llm.tools.ToolLoop;
 import dev.kualu.mcp.McpConnectionManager;
 import dev.kualu.web.api.ApiDtos.HistoryMessage;
 import dev.kualu.web.config.LlmProperties;
+import dev.kualu.web.mcp.UserMcpRegistry;
 import dev.kualu.web.metrics.TurnMetrics;
 import dev.kualu.web.session.ImageRef;
 import dev.kualu.web.session.Session;
@@ -22,11 +23,11 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
-import java.util.function.Supplier;
 
 /**
  * Turns HTTP chat operations into llm-core calls and session updates.
@@ -50,7 +51,9 @@ public class ChatService {
     private final LlmClient llmClient;
     private final MemoryCompressor compressor;
     private final LlmProperties llmProperties;
-    private final ToolLoop toolLoop;
+    private final List<AgentTool> staticTools;
+    private final ObjectProvider<McpConnectionManager> mcpManagers;
+    private final ObjectProvider<UserMcpRegistry> userMcpRegistries;
     private final TurnMetrics turnMetrics;
     private final Executor compressExecutor;
 
@@ -62,9 +65,10 @@ public class ChatService {
             LlmProperties llmProperties,
             List<AgentTool> tools,
             ObjectProvider<McpConnectionManager> mcpManagers,
+            ObjectProvider<UserMcpRegistry> userMcpRegistries,
             TurnMetrics turnMetrics) {
-        this(sessionStore, llmClients, compressors, llmProperties, tools, mcpManagers, turnMetrics,
-                newDaemonExecutor());
+        this(sessionStore, llmClients, compressors, llmProperties, tools, mcpManagers, userMcpRegistries,
+                turnMetrics, newDaemonExecutor());
     }
 
     /** Visible for tests: lets them run compression inline (e.g. {@code Runnable::run}). */
@@ -75,14 +79,17 @@ public class ChatService {
             LlmProperties llmProperties,
             List<AgentTool> tools,
             ObjectProvider<McpConnectionManager> mcpManagers,
+            ObjectProvider<UserMcpRegistry> userMcpRegistries,
             TurnMetrics turnMetrics,
             Executor compressExecutor) {
         this.sessionStore = sessionStore;
         this.llmClient = llmClients.getIfAvailable();
         this.compressor = compressors.getIfAvailable();
         this.llmProperties = llmProperties;
+        this.staticTools = List.copyOf(tools);
+        this.mcpManagers = mcpManagers;
+        this.userMcpRegistries = userMcpRegistries;
         this.turnMetrics = turnMetrics;
-        this.toolLoop = this.llmClient == null ? null : new ToolLoop(this.llmClient, toolSupplier(tools, mcpManagers));
         this.compressExecutor = compressExecutor;
     }
 
@@ -101,17 +108,30 @@ public class ChatService {
         }
     }
 
-    /** Static beans (exec) plus the current MCP tool snapshot, per turn. */
-    private static Supplier<List<AgentTool>> toolSupplier(
-            List<AgentTool> staticTools, ObjectProvider<McpConnectionManager> mcpManagers) {
-        return () -> {
-            List<AgentTool> all = new ArrayList<>(staticTools);
-            McpConnectionManager manager = mcpManagers.getIfAvailable();
-            if (manager != null) {
-                all.addAll(manager.tools());
-            }
-            return all;
-        };
+    /**
+     * One turn's tool view: static beans (exec), the owner's own MCP tools, and the
+     * shared {@code mcp.json} tools — minus any shared server the owner redefines
+     * under the same name. Re-read every turn so tools can come and go.
+     */
+    private List<AgentTool> toolsFor(String owner) {
+        List<AgentTool> all = new ArrayList<>(staticTools);
+        Set<String> overridden = Set.of();
+        UserMcpRegistry registry = userMcpRegistries.getIfAvailable();
+        if (registry != null) {
+            UserMcpRegistry.UserTools userTools = registry.toolsFor(owner);
+            all.addAll(userTools.tools());
+            overridden = userTools.serverNames();
+        }
+        McpConnectionManager manager = mcpManagers.getIfAvailable();
+        if (manager != null) {
+            all.addAll(manager.toolsExcluding(overridden));
+        }
+        return all;
+    }
+
+    /** Per-turn loop: the tool list is re-read from the owner's MCP managers on run(). */
+    private ToolLoop toolLoop(String owner) {
+        return new ToolLoop(llmClient, () -> toolsFor(owner));
     }
 
     public boolean isLlmConfigured() {
@@ -124,7 +144,7 @@ public class ChatService {
         synchronized (session.memory()) {
             try {
                 // The tool loop commits the user turn, any tool rounds, and the reply.
-                String reply = toolLoop.run(session.memory(), content, images);
+                String reply = toolLoop(session.owner()).run(session.memory(), content, images);
                 persistAppendedQuietly(session);
                 scheduleCompress(session);
                 return reply;
@@ -138,7 +158,7 @@ public class ChatService {
         requireLlm();
         synchronized (session.memory()) {
             try {
-                String reply = toolLoop.run(session.memory(), content, images, onDelta);
+                String reply = toolLoop(session.owner()).run(session.memory(), content, images, onDelta);
                 persistAppendedQuietly(session);
                 scheduleCompress(session);
                 return reply;

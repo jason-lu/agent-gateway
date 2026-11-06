@@ -46,7 +46,7 @@ class ChatServiceStreamTest {
                 store,
                 provider(client),
                 emptyCompressorProvider(),
-                new LlmProperties("http://localhost", "key", "model", 90), List.of(), emptyMcpProvider(), testMetrics(), Runnable::run);
+                new LlmProperties("http://localhost", "key", "model", 90), List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
 
         List<String> deltas = new ArrayList<>();
         String reply = service.chatStream(session, "hi", null, deltas::add);
@@ -68,7 +68,7 @@ class ChatServiceStreamTest {
                 store,
                 provider(client),
                 emptyCompressorProvider(),
-                new LlmProperties("http://localhost", "key", "model", 90), List.of(), emptyMcpProvider(), testMetrics(), Runnable::run);
+                new LlmProperties("http://localhost", "key", "model", 90), List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
 
         try {
             service.chat(session, "hi", null);
@@ -95,7 +95,7 @@ class ChatServiceStreamTest {
                 store,
                 provider(client),
                 emptyCompressorProvider(),
-                new LlmProperties("http://localhost", "key", "model", 90), List.of(), emptyMcpProvider(), testMetrics(), Runnable::run);
+                new LlmProperties("http://localhost", "key", "model", 90), List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
 
         List<String> deltas = new ArrayList<>();
         IllegalStateException thrown = assertThrows(
@@ -131,6 +131,11 @@ class ChatServiceStreamTest {
 
     @SuppressWarnings("unchecked")
     private static org.springframework.beans.factory.ObjectProvider<dev.kualu.mcp.McpConnectionManager> emptyMcpProvider() {
+        return mock(org.springframework.beans.factory.ObjectProvider.class);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static org.springframework.beans.factory.ObjectProvider<dev.kualu.web.mcp.UserMcpRegistry> emptyUserMcpProvider() {
         return mock(org.springframework.beans.factory.ObjectProvider.class);
     }
 }
