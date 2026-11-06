@@ -9,3 +9,6 @@ Preserve:
 
 Write in the same language as the conversation. Be dense and specific;
 drop pleasantries and repetition. Output only the summary text — no preamble.
+
+The request states a character budget; stay within it. Overlong output is
+truncated, so keep only what later turns need to continue the work.

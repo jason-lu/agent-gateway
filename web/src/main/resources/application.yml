@@ -33,6 +33,7 @@ agent:
     enabled: ${AGENT_MEMORY_ENABLED:true}
     max-messages: ${AGENT_MEMORY_MAX_MESSAGES:20}
     keep-messages: ${AGENT_MEMORY_KEEP_MESSAGES:8}
+    max-summary-chars: ${AGENT_MEMORY_MAX_SUMMARY_CHARS:4000}
     instruction: ${AGENT_MEMORY_INSTRUCTION:}
   tools:
     exec:

@@ -61,17 +61,21 @@ public final class MemoryCompressor {
     private final int maxMessages;
     private final int keepMessages;
     private final String instruction;
+    private final int maxSummaryChars;
 
     /**
-     * @param llm          client used for the summarisation call
-     * @param maxMessages  trigger threshold, counted over the context sent to
-     *                     the model (system + summary + verbatim tail)
-     * @param keepMessages how many recent turns survive verbatim after compression
-     * @param instruction  summarisation instruction; {@code null} or blank uses
-     *                     {@link #DEFAULT_INSTRUCTION}
+     * @param llm             client used for the summarisation call
+     * @param maxMessages     trigger threshold, counted over the context sent to
+     *                        the model (system + summary + verbatim tail)
+     * @param keepMessages    how many recent turns survive verbatim after compression
+     * @param instruction     summarisation instruction; {@code null} or blank uses
+     *                        {@link #DEFAULT_INSTRUCTION}
+     * @param maxSummaryChars hard cap on the stored summary body; longer output is
+     *                        truncated so the request payload stays bounded
      * @throws IllegalArgumentException if the thresholds cannot yield a bounded history
      */
-    public MemoryCompressor(LlmClient llm, int maxMessages, int keepMessages, String instruction) {
+    public MemoryCompressor(LlmClient llm, int maxMessages, int keepMessages, String instruction,
+            int maxSummaryChars) {
         this.llm = Objects.requireNonNull(llm, "llm");
         if (keepMessages < 2) {
             throw new IllegalArgumentException("keepMessages must be >= 2 (got " + keepMessages + ")");
@@ -81,11 +85,15 @@ public final class MemoryCompressor {
                     "maxMessages must be > keepMessages + 2 (got " + maxMessages
                             + ", keepMessages " + keepMessages + ")");
         }
+        if (maxSummaryChars <= 0) {
+            throw new IllegalArgumentException("maxSummaryChars must be > 0 (got " + maxSummaryChars + ")");
+        }
         this.maxMessages = maxMessages;
         this.keepMessages = keepMessages;
         this.instruction = (instruction == null || instruction.isBlank())
                 ? DEFAULT_INSTRUCTION
                 : instruction;
+        this.maxSummaryChars = maxSummaryChars;
     }
 
     /**
@@ -143,8 +151,10 @@ public final class MemoryCompressor {
         String summaryBody;
         try {
             summaryBody = llm.chat(List.of(
-                    ChatMessage.system(instruction),
-                    ChatMessage.user(summarizePrompt(previousSummary, dropped))));
+                    ChatMessage.system(instruction + "\n\nCharacter budget: " + maxSummaryChars
+                            + ". Longer output is truncated."),
+                    ChatMessage.user(summarizePrompt(previousSummary, dropped))),
+                    maxSummaryChars);
         } catch (RuntimeException ex) {
             String reason = ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName();
             log.warn("{} FAILED: {}; history left unchanged (size {})",
@@ -157,6 +167,11 @@ public final class MemoryCompressor {
             log.warn("{} FAILED: summariser returned blank text; history left unchanged (size {})",
                     prefix, all.size());
             return false;
+        }
+        if (summaryBody.length() > maxSummaryChars) {
+            log.debug("{}: summary truncated to {} chars (was {})",
+                    prefix, maxSummaryChars, summaryBody.length());
+            summaryBody = truncate(summaryBody, maxSummaryChars);
         }
 
         List<ChatMessage> rebuilt = new ArrayList<>(all.size() + 1);
@@ -181,6 +196,15 @@ public final class MemoryCompressor {
      */
     private static ChatMessage buildSummaryMessage(String summaryBody) {
         return ChatMessage.system(SUMMARY_PREFIX + summaryBody);
+    }
+
+    /** Caps the summary body at {@code maxChars} without splitting a surrogate pair. */
+    private static String truncate(String text, int maxChars) {
+        int cut = maxChars;
+        if (cut > 0 && Character.isHighSurrogate(text.charAt(cut - 1))) {
+            cut--;
+        }
+        return text.substring(0, cut);
     }
 
     /** Builds the summarisation request body. Visible for tests. */

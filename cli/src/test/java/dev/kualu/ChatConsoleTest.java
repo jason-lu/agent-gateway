@@ -31,7 +31,7 @@ class ChatConsoleTest {
         }
 
         @Override
-        public String chat(List<ChatMessage> messages) {
+        public String chat(List<ChatMessage> messages, Integer maxTokens) {
             chatCalls.add(messages);
             String last = messages.get(messages.size() - 1).content();
             return "full-reply:" + last;
@@ -278,7 +278,7 @@ class ChatConsoleTest {
         }
 
         @Override
-        public String chat(List<ChatMessage> messages) {
+        public String chat(List<ChatMessage> messages, Integer maxTokens) {
             summarizeCalls.add(messages);
             return "SUMMARY-TEXT";
         }
@@ -309,7 +309,7 @@ class ChatConsoleTest {
     @Test
     void longConversation_compressesBeforeBuildingThePayload() {
         CompressingLlm client = new CompressingLlm();
-        dev.kualu.llm.memory.MemoryCompressor compressor = new dev.kualu.llm.memory.MemoryCompressor(client, 6, 2, null);
+        dev.kualu.llm.memory.MemoryCompressor compressor = new dev.kualu.llm.memory.MemoryCompressor(client, 6, 2, null, 4000);
 
         StringBuilder input = new StringBuilder();
         for (int i = 0; i < 5; i++) {
@@ -329,7 +329,7 @@ class ChatConsoleTest {
     @Test
     void history_hidesTheCompressionSummary() {
         CompressingLlm client = new CompressingLlm();
-        dev.kualu.llm.memory.MemoryCompressor compressor = new dev.kualu.llm.memory.MemoryCompressor(client, 6, 2, null);
+        dev.kualu.llm.memory.MemoryCompressor compressor = new dev.kualu.llm.memory.MemoryCompressor(client, 6, 2, null, 4000);
 
         StringBuilder input = new StringBuilder();
         for (int i = 0; i < 5; i++) {

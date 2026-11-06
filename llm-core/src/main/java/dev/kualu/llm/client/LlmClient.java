@@ -67,8 +67,17 @@ public class LlmClient {
 
     /** Sends the given conversation turns and returns the full assistant reply text. */
     public String chat(List<ChatMessage> messages) {
+        return chat(messages, null);
+    }
+
+    /**
+     * Sends the given conversation turns with an output-token cap and returns the
+     * full assistant reply text. {@code maxTokens} of {@code null} leaves the cap
+     * to the provider default.
+     */
+    public String chat(List<ChatMessage> messages, Integer maxTokens) {
         HttpResponse<String> response =
-                http.post(completionsUrl(), headers(false), requestJson(messages, false, List.of()));
+                http.post(completionsUrl(), headers(false), requestJson(messages, false, List.of(), maxTokens));
         return ChatResponses.assistantText(response);
     }
 
@@ -78,7 +87,7 @@ public class LlmClient {
      */
     public AssistantTurn complete(List<ChatMessage> messages, List<ToolSpec> tools) {
         HttpResponse<String> response =
-                http.post(completionsUrl(), headers(false), requestJson(messages, false, tools));
+                http.post(completionsUrl(), headers(false), requestJson(messages, false, tools, null));
         return ChatResponses.assistantTurn(response);
     }
 
@@ -145,7 +154,7 @@ public class LlmClient {
 
     private Stream<SseDelta> deltaStream(List<ChatMessage> messages, List<ToolSpec> tools) {
         HttpResponse<Stream<String>> response =
-                http.postLines(completionsUrl(), headers(true), requestJson(messages, true, tools));
+                http.postLines(completionsUrl(), headers(true), requestJson(messages, true, tools, null));
 
         Stream<String> lines = response.body();
         int status = response.statusCode();
@@ -186,7 +195,7 @@ public class LlmClient {
         return headers;
     }
 
-    private String requestJson(List<ChatMessage> messages, boolean stream, List<ToolSpec> tools) {
+    private String requestJson(List<ChatMessage> messages, boolean stream, List<ToolSpec> tools, Integer maxTokens) {
         if (messages == null || messages.isEmpty()) {
             throw new LlmException("messages must not be empty");
         }
@@ -245,6 +254,9 @@ public class LlmClient {
         }
         if (stream) {
             body.addProperty("stream", true);
+        }
+        if (maxTokens != null) {
+            body.addProperty("max_tokens", maxTokens);
         }
         return body.toString();
     }

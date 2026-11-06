@@ -99,10 +99,11 @@ public class Main {
         }
         int maxMessages = Integer.parseInt(envOr("AGENT_MEMORY_MAX_MESSAGES", "20"));
         int keepMessages = Integer.parseInt(envOr("AGENT_MEMORY_KEEP_MESSAGES", "8"));
+        int maxSummaryChars = Integer.parseInt(envOr("AGENT_MEMORY_MAX_SUMMARY_CHARS", "4000"));
         String instruction = envOr("AGENT_MEMORY_INSTRUCTION", "");
-        log.info("memory-compress configured: enabled=true, max-messages={}, keep-messages={}",
-                maxMessages, keepMessages);
-        return new MemoryCompressor(client, maxMessages, keepMessages, instruction);
+        log.info("memory-compress configured: enabled=true, max-messages={}, keep-messages={}, max-summary-chars={}",
+                maxMessages, keepMessages, maxSummaryChars);
+        return new MemoryCompressor(client, maxMessages, keepMessages, instruction, maxSummaryChars);
     }
 
     private static String envOr(String key, String fallback) {

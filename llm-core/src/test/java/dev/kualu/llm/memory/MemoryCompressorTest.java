@@ -21,6 +21,7 @@ class MemoryCompressorTest {
     static final class StubLlm extends LlmClient {
         final List<List<ChatMessage>> calls = new ArrayList<>();
         final List<String> userPayloads = new ArrayList<>();
+        final List<Integer> maxTokensCalls = new ArrayList<>();
         List<String> replies = List.of("SUMMARY");
         RuntimeException failure;
 
@@ -29,9 +30,10 @@ class MemoryCompressorTest {
         }
 
         @Override
-        public String chat(List<ChatMessage> messages) {
+        public String chat(List<ChatMessage> messages, Integer maxTokens) {
             calls.add(List.copyOf(messages));
             userPayloads.add(messages.get(messages.size() - 1).content());
+            maxTokensCalls.add(maxTokens);
             if (failure != null) {
                 throw failure;
             }
@@ -54,7 +56,7 @@ class MemoryCompressorTest {
     @Test
     void belowThreshold_doesNothing() {
         StubLlm llm = new StubLlm();
-        MemoryCompressor compressor = new MemoryCompressor(llm, 20, 8, null);
+        MemoryCompressor compressor = new MemoryCompressor(llm, 20, 8, null, 4000);
         ConversationMemory memory = conversation(3, "be brief");
 
         assertFalse(compressor.maybeCompress(memory, "test"));
@@ -66,7 +68,7 @@ class MemoryCompressorTest {
     @Test
     void aboveThreshold_foldsOldTurnsIntoSummary_keepsTail() {
         StubLlm llm = new StubLlm();
-        MemoryCompressor compressor = new MemoryCompressor(llm, 8, 3, null);
+        MemoryCompressor compressor = new MemoryCompressor(llm, 8, 3, null, 4000);
         ConversationMemory memory = conversation(5, "be brief");
 
         assertTrue(compressor.maybeCompress(memory, "test"));
@@ -102,7 +104,7 @@ class MemoryCompressorTest {
     @Test
     void compression_keepsEveryRawTurnInHistory_onlyContextShrinks() {
         StubLlm llm = new StubLlm();
-        MemoryCompressor compressor = new MemoryCompressor(llm, 8, 3, null);
+        MemoryCompressor compressor = new MemoryCompressor(llm, 8, 3, null, 4000);
         ConversationMemory memory = conversation(5, "be brief");
 
         assertTrue(compressor.maybeCompress(memory, "test"));
@@ -119,7 +121,7 @@ class MemoryCompressorTest {
     @Test
     void originalSystemPrompt_isNeverTouchedOrDropped() {
         StubLlm llm = new StubLlm();
-        MemoryCompressor compressor = new MemoryCompressor(llm, 6, 2, null);
+        MemoryCompressor compressor = new MemoryCompressor(llm, 6, 2, null, 4000);
         ConversationMemory memory = conversation(4, "SYSTEM-PROMPT-EXACT");
 
         compressor.maybeCompress(memory, "test");
@@ -130,7 +132,7 @@ class MemoryCompressorTest {
     @Test
     void withoutSystemPrompt_summaryIsFirstInContext() {
         StubLlm llm = new StubLlm();
-        MemoryCompressor compressor = new MemoryCompressor(llm, 6, 2, null);
+        MemoryCompressor compressor = new MemoryCompressor(llm, 6, 2, null, 4000);
         ConversationMemory memory = conversation(4, null);
 
         assertTrue(compressor.maybeCompress(memory, "test"));
@@ -145,7 +147,7 @@ class MemoryCompressorTest {
     @Test
     void cutPointOnTool_rollsBackToEarlierUserTurn() {
         StubLlm llm = new StubLlm();
-        MemoryCompressor compressor = new MemoryCompressor(llm, 6, 3, null);
+        MemoryCompressor compressor = new MemoryCompressor(llm, 6, 3, null, 4000);
         ConversationMemory memory = new ConversationMemory();
         memory.addUser("u0");
         memory.addTool("t0", "call_0");
@@ -173,7 +175,7 @@ class MemoryCompressorTest {
     @Test
     void noUserCutPoint_skipsCompression() {
         StubLlm llm = new StubLlm();
-        MemoryCompressor compressor = new MemoryCompressor(llm, 5, 2, null);
+        MemoryCompressor compressor = new MemoryCompressor(llm, 5, 2, null, 4000);
         ConversationMemory memory = new ConversationMemory();
         for (int i = 0; i < 3; i++) {
             memory.addTool("t" + i, "call_" + i);
@@ -189,7 +191,7 @@ class MemoryCompressorTest {
     void incremental_secondCallSeesOldSummaryAndAgedOutTurns() {
         StubLlm llm = new StubLlm();
         llm.replies = List.of("FIRST-SUMMARY", "SECOND-SUMMARY");
-        MemoryCompressor compressor = new MemoryCompressor(llm, 6, 2, null);
+        MemoryCompressor compressor = new MemoryCompressor(llm, 6, 2, null, 4000);
         ConversationMemory memory = conversation(3, "sys");
         // sys + 6 turns = 7 > 6
 
@@ -229,7 +231,7 @@ class MemoryCompressorTest {
     void summaryFailure_leavesHistoryUntouched() {
         StubLlm llm = new StubLlm();
         llm.failure = new LlmException("boom", 500, "body");
-        MemoryCompressor compressor = new MemoryCompressor(llm, 6, 2, null);
+        MemoryCompressor compressor = new MemoryCompressor(llm, 6, 2, null, 4000);
         ConversationMemory memory = conversation(4, "sys");
         List<ChatMessage> before = memory.messages();
 
@@ -241,7 +243,7 @@ class MemoryCompressorTest {
     void blankSummary_isTreatedAsFailure() {
         StubLlm llm = new StubLlm();
         llm.replies = List.of("   ");
-        MemoryCompressor compressor = new MemoryCompressor(llm, 6, 2, null);
+        MemoryCompressor compressor = new MemoryCompressor(llm, 6, 2, null, 4000);
         ConversationMemory memory = conversation(4, "sys");
         List<ChatMessage> before = memory.messages();
 
@@ -252,7 +254,7 @@ class MemoryCompressorTest {
     @Test
     void summaryMessage_isRecognisedByPrefixNotPosition() {
         StubLlm llm = new StubLlm();
-        MemoryCompressor compressor = new MemoryCompressor(llm, 6, 2, null);
+        MemoryCompressor compressor = new MemoryCompressor(llm, 6, 2, null, 4000);
         ConversationMemory memory = new ConversationMemory();
         memory.addSystem("plain system prompt");
         memory.addSystem(MemoryCompressor.SUMMARY_PREFIX + "earlier context");
@@ -274,7 +276,7 @@ class MemoryCompressorTest {
     @Test
     void plainSystemMessage_isNotMistakenForSummary() {
         StubLlm llm = new StubLlm();
-        MemoryCompressor compressor = new MemoryCompressor(llm, 6, 2, null);
+        MemoryCompressor compressor = new MemoryCompressor(llm, 6, 2, null, 4000);
         ConversationMemory memory = new ConversationMemory();
         memory.addSystem("a system prompt that talks about 【历史对话摘要】 in the middle");
         for (int i = 0; i < 4; i++) {
@@ -297,7 +299,7 @@ class MemoryCompressorTest {
     @Test
     void systemPromptStartingWithMarker_isTreatedAsSummary() {
         StubLlm llm = new StubLlm();
-        MemoryCompressor compressor = new MemoryCompressor(llm, 6, 2, null);
+        MemoryCompressor compressor = new MemoryCompressor(llm, 6, 2, null, 4000);
         ConversationMemory memory = new ConversationMemory();
         memory.addSystem(MemoryCompressor.SUMMARY_PREFIX + "user-authored prompt");
         for (int i = 0; i < 4; i++) {
@@ -334,22 +336,67 @@ class MemoryCompressorTest {
     @Test
     void invalidThresholds_areRejected() {
         StubLlm llm = new StubLlm();
-        assertThrows(IllegalArgumentException.class, () -> new MemoryCompressor(llm, 10, 1, null));
-        assertThrows(IllegalArgumentException.class, () -> new MemoryCompressor(llm, 10, 0, null));
-        assertThrows(IllegalArgumentException.class, () -> new MemoryCompressor(llm, 4, 2, null));
-        assertThrows(IllegalArgumentException.class, () -> new MemoryCompressor(llm, -1, 2, null));
-        assertThrows(NullPointerException.class, () -> new MemoryCompressor(null, 10, 2, null));
+        assertThrows(IllegalArgumentException.class, () -> new MemoryCompressor(llm, 10, 1, null, 4000));
+        assertThrows(IllegalArgumentException.class, () -> new MemoryCompressor(llm, 10, 0, null, 4000));
+        assertThrows(IllegalArgumentException.class, () -> new MemoryCompressor(llm, 4, 2, null, 4000));
+        assertThrows(IllegalArgumentException.class, () -> new MemoryCompressor(llm, -1, 2, null, 4000));
+        assertThrows(IllegalArgumentException.class, () -> new MemoryCompressor(llm, 10, 2, null, 0));
+        assertThrows(IllegalArgumentException.class, () -> new MemoryCompressor(llm, 10, 2, null, -1));
+        assertThrows(NullPointerException.class, () -> new MemoryCompressor(null, 10, 2, null, 4000));
     }
 
     @Test
     void blankInstruction_fallsBackToDefault() {
         StubLlm llm = new StubLlm();
-        MemoryCompressor compressor = new MemoryCompressor(llm, 6, 2, "   ");
+        MemoryCompressor compressor = new MemoryCompressor(llm, 6, 2, "   ", 4000);
         ConversationMemory memory = conversation(4, "sys");
 
         compressor.maybeCompress(memory, "test");
 
-        assertEquals(MemoryCompressor.DEFAULT_INSTRUCTION, llm.calls.get(0).get(0).content());
+        String systemContent = llm.calls.get(0).get(0).content();
+        assertTrue(systemContent.startsWith(MemoryCompressor.DEFAULT_INSTRUCTION));
+        assertTrue(systemContent.contains("Character budget: 4000"),
+                "the summariser must be told the character budget");
+    }
+
+    @Test
+    void summarisationCall_carriesMaxTokens() {
+        StubLlm llm = new StubLlm();
+        MemoryCompressor compressor = new MemoryCompressor(llm, 6, 2, null, 300);
+        ConversationMemory memory = conversation(4, "sys");
+
+        compressor.maybeCompress(memory, "test");
+
+        assertEquals(List.of(300), llm.maxTokensCalls);
+    }
+
+    @Test
+    void summaryAboveCharBudget_isTruncated() {
+        StubLlm llm = new StubLlm();
+        llm.replies = List.of("0123456789".repeat(20));
+        MemoryCompressor compressor = new MemoryCompressor(llm, 6, 2, null, 25);
+        ConversationMemory memory = conversation(4, "sys");
+
+        assertTrue(compressor.maybeCompress(memory, "test"));
+
+        String summary = memory.context().get(1).content()
+                .substring(MemoryCompressor.SUMMARY_PREFIX.length());
+        assertEquals(25, summary.length());
+        assertEquals("0123456789012345678901234", summary);
+    }
+
+    @Test
+    void summaryAtCharBudget_isKeptIntact() {
+        StubLlm llm = new StubLlm();
+        llm.replies = List.of("0123456789".repeat(2) + "01234");
+        MemoryCompressor compressor = new MemoryCompressor(llm, 6, 2, null, 25);
+        ConversationMemory memory = conversation(4, "sys");
+
+        assertTrue(compressor.maybeCompress(memory, "test"));
+
+        String summary = memory.context().get(1).content()
+                .substring(MemoryCompressor.SUMMARY_PREFIX.length());
+        assertEquals(25, summary.length());
     }
 
     @Test

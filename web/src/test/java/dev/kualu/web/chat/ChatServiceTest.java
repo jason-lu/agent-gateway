@@ -36,7 +36,7 @@ class ChatServiceTest {
         }
 
         @Override
-        public String chat(List<ChatMessage> messages) {
+        public String chat(List<ChatMessage> messages, Integer maxTokens) {
             if (isSummarization(messages)) {
                 if (summarizeFailure != null) {
                     throw summarizeFailure;
@@ -136,7 +136,7 @@ class ChatServiceTest {
         ChatService service = new ChatService(
                 store,
                 clientProvider(llm),
-                compressorProvider(new MemoryCompressor(llm, 8, 3, null)),
+                compressorProvider(new MemoryCompressor(llm, 8, 3, null, 4000)),
                 configuredProperties(), List.of(), emptyMcpProvider());
 
         assertEquals("REPLY", service.chat(session, "new question", null));
@@ -170,7 +170,7 @@ class ChatServiceTest {
         ChatService service = new ChatService(
                 store,
                 clientProvider(llm),
-                compressorProvider(new MemoryCompressor(llm, 8, 3, null)),
+                compressorProvider(new MemoryCompressor(llm, 8, 3, null, 4000)),
                 configuredProperties(), List.of(), emptyMcpProvider());
 
         assertEquals("REPLY", service.chat(session, "new question", null));

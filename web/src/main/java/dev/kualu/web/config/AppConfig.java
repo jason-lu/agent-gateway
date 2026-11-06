@@ -140,10 +140,11 @@ public class AppConfig {
             log.info("memory-compress configured: enabled=true but llm is not configured; compressor inactive");
             return null;
         }
-        log.info("memory-compress configured: enabled=true, max-messages={}, keep-messages={}",
-                properties.maxMessages(), properties.keepMessages());
+        log.info("memory-compress configured: enabled=true, max-messages={}, keep-messages={}, max-summary-chars={}",
+                properties.maxMessages(), properties.keepMessages(), properties.maxSummaryChars());
         return new MemoryCompressor(
-                llmClient, properties.maxMessages(), properties.keepMessages(), properties.instruction());
+                llmClient, properties.maxMessages(), properties.keepMessages(), properties.instruction(),
+                properties.maxSummaryChars());
     }
 
     /**

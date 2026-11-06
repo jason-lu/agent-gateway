@@ -13,6 +13,7 @@ public record MemoryProperties(
         boolean enabled,
         int maxMessages,
         int keepMessages,
+        int maxSummaryChars,
         String instruction
 ) {
 
@@ -24,6 +25,10 @@ public record MemoryProperties(
             if (maxMessages <= keepMessages + 2) {
                 throw new IllegalArgumentException("agent.memory.max-messages must be > keep-messages + 2 (got "
                         + maxMessages + ", keep-messages " + keepMessages + ")");
+            }
+            if (maxSummaryChars <= 0) {
+                throw new IllegalArgumentException(
+                        "agent.memory.max-summary-chars must be > 0 (got " + maxSummaryChars + ")");
             }
         }
     }

@@ -414,6 +414,24 @@ class LlmClientTest {
     }
 
     @Test
+    void chat_withoutMaxTokens_omitsTheCap() {
+        LlmClient client = new LlmClient(config);
+        client.chat("Hi");
+
+        assertFalse(capturedBody.get().contains("max_tokens"),
+                "an uncapped chat must leave max_tokens to the provider default");
+    }
+
+    @Test
+    void chat_withMaxTokens_sendsTheCap() {
+        LlmClient client = new LlmClient(config);
+        client.chat(List.of(ChatMessage.user("Hi")), 123);
+
+        JsonObject body = JsonParser.parseString(capturedBody.get()).getAsJsonObject();
+        assertEquals(123, body.get("max_tokens").getAsInt());
+    }
+
+    @Test
     void chat_withMessages_sendsFullHistory() {
         LlmClient client = new LlmClient(config);
 
