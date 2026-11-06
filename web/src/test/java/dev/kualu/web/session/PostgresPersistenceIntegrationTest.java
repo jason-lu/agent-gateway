@@ -16,7 +16,12 @@ import org.springframework.security.crypto.factory.PasswordEncoderFactories;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.List;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -162,6 +167,46 @@ class PostgresPersistenceIntegrationTest {
                 "select count(*) from agent.session_images where session_id = ?::uuid",
                 Integer.class, created.id());
         assertEquals(0, afterDelete);
+    }
+
+    @Test
+    void backfillMigration_externalizesLegacyInlineImages() throws Exception {
+        String sessionId = UUID.randomUUID().toString();
+        String legacyImage = "data:image/png;base64,AAAA";
+        jdbc.update(
+                "insert into agent.sessions (id, owner, created_at, messages) values (?::uuid, ?, now(), ?::jsonb)",
+                sessionId, "ada",
+                "[{\"role\":\"user\",\"content\":\"look\",\"images\":[\"" + legacyImage + "\"]}]");
+
+        // Replaying the shipped script (Flyway already ran it on an empty table)
+        // must migrate legacy rows and stay idempotent.
+        String script = new String(
+                getClass().getClassLoader()
+                        .getResourceAsStream("db/migration/V5__externalize_session_images.sql")
+                        .readAllBytes(),
+                StandardCharsets.UTF_8);
+        jdbc.execute(script);
+
+        String json = jdbc.queryForObject(
+                "select messages::text from agent.sessions where id = ?::uuid", String.class, sessionId);
+        assertTrue(json.contains("ref:" + sessionId + "/"), json);
+        assertFalse(json.contains("AAAA"), "pixels must be gone from the jsonb: " + json);
+
+        Session reloaded = store.find("ada", sessionId).orElseThrow();
+        String ref = reloaded.memory().messages().get(0).images().get(0);
+        assertEquals(sha256Hex(legacyImage), ImageRef.imageIdOf(ref),
+                "the migration must hash like the Java-side externalisation");
+        assertEquals(legacyImage,
+                store.findImageContent(sessionId, ImageRef.imageIdOf(ref)).orElseThrow());
+    }
+
+    private static String sha256Hex(String content) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(content.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException(ex);
+        }
     }
 
     @Test
