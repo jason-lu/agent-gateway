@@ -6,8 +6,10 @@ import dev.kualu.llm.client.LlmConfig;
 import dev.kualu.llm.LlmException;
 import dev.kualu.llm.memory.MemoryCompressor;
 import dev.kualu.web.config.LlmProperties;
+import dev.kualu.web.metrics.TurnMetrics;
 import dev.kualu.web.session.InMemorySessionStore;
 import dev.kualu.web.session.Session;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 
@@ -67,7 +69,7 @@ class ChatServiceTest {
         session.memory().addAssistant("hi");
         session.memory().addTool("tool", "call-1");
 
-        ChatService service = new ChatService(store, emptyProvider(), emptyCompressorProvider(), configuredProperties(), List.of(), emptyMcpProvider());
+        ChatService service = new ChatService(store, emptyProvider(), emptyCompressorProvider(), configuredProperties(), List.of(), emptyMcpProvider(), testMetrics(), Runnable::run);
         var history = service.history(session);
 
         assertEquals(2, history.size());
@@ -81,7 +83,7 @@ class ChatServiceTest {
         Session session = store.create("ada", null);
         RecordingLlm llm = new RecordingLlm();
         ChatService service = new ChatService(
-                store, clientProvider(llm), emptyCompressorProvider(), configuredProperties(), List.of(), emptyMcpProvider());
+                store, clientProvider(llm), emptyCompressorProvider(), configuredProperties(), List.of(), emptyMcpProvider(), testMetrics(), Runnable::run);
         List<String> images = List.of("data:image/png;base64,AAAA");
 
         assertEquals("REPLY", service.chat(session, "这是什么？", images));
@@ -102,7 +104,7 @@ class ChatServiceTest {
         InMemorySessionStore store = new InMemorySessionStore();
         Session session = store.create("ada", null);
         ChatService service = new ChatService(
-                store, emptyProvider(), emptyCompressorProvider(), new LlmProperties(null, null, null, 90), List.of(), emptyMcpProvider());
+                store, emptyProvider(), emptyCompressorProvider(), new LlmProperties(null, null, null, 90), List.of(), emptyMcpProvider(), testMetrics(), Runnable::run);
 
         assertThrows(LlmNotConfiguredException.class, () -> service.chat(session, "hi", null));
         assertEquals(0, session.messageCount());
@@ -111,48 +113,59 @@ class ChatServiceTest {
     @Test
     void isLlmConfiguredRequiresPropertiesAndClient() {
         ChatService missingClient = new ChatService(
-                new InMemorySessionStore(), emptyProvider(), emptyCompressorProvider(), configuredProperties(), List.of(), emptyMcpProvider());
+                new InMemorySessionStore(), emptyProvider(), emptyCompressorProvider(), configuredProperties(), List.of(), emptyMcpProvider(), testMetrics(), Runnable::run);
         ChatService missingProps = new ChatService(
                 new InMemorySessionStore(),
                 clientProvider(new LlmClient(new LlmConfig("http://x", "k", "m"))),
                 emptyCompressorProvider(),
-                new LlmProperties(null, null, null, 90), List.of(), emptyMcpProvider());
+                new LlmProperties(null, null, null, 90), List.of(), emptyMcpProvider(), testMetrics(), Runnable::run);
 
         assertFalse(missingClient.isLlmConfigured());
         assertFalse(missingProps.isLlmConfigured());
     }
 
     @Test
-    void chatCompressesBeforeBuildingThePayload() {
+    void chatCompressesAfterTheTurn() {
         InMemorySessionStore store = new InMemorySessionStore();
         Session session = store.create("ada", "sys");
         for (int i = 0; i < 10; i++) {
             session.memory().addUser("u" + i);
             session.memory().addAssistant("a" + i);
         }
-        int uncompressedSize = session.messageCount();
 
         RecordingLlm llm = new RecordingLlm();
         ChatService service = new ChatService(
                 store,
                 clientProvider(llm),
                 compressorProvider(new MemoryCompressor(llm, 8, 3, null, 4000)),
-                configuredProperties(), List.of(), emptyMcpProvider());
+                configuredProperties(), List.of(), emptyMcpProvider(), testMetrics(), Runnable::run);
 
         assertEquals("REPLY", service.chat(session, "new question", null));
 
-        List<ChatMessage> payload = llm.replyPayloads.get(0);
-        assertTrue(payload.stream().anyMatch(m -> m.content().startsWith(MemoryCompressor.SUMMARY_PREFIX)),
-                "payload must already carry the summary, i.e. compression ran first");
-        assertEquals("new question", payload.get(payload.size() - 1).content());
-        assertTrue(payload.size() < uncompressedSize + 1, "payload must be smaller than the uncompressed history");
+        // The triggering turn runs with the uncompressed history — it must not
+        // wait for the summariser.
+        List<ChatMessage> firstPayload = llm.replyPayloads.get(0);
+        assertTrue(firstPayload.stream().noneMatch(m -> m.content().startsWith(MemoryCompressor.SUMMARY_PREFIX)),
+                "the triggering turn must not carry the summary");
+        assertEquals("new question", firstPayload.get(firstPayload.size() - 1).content());
+
+        // The post-turn fold ran, so the next payload is bounded.
+        assertTrue(session.memory().context().stream()
+                        .anyMatch(m -> m.content().startsWith(MemoryCompressor.SUMMARY_PREFIX)),
+                "compression runs right after the turn");
+        assertEquals("REPLY", service.chat(session, "follow up", null));
+        List<ChatMessage> secondPayload = llm.replyPayloads.get(1);
+        assertTrue(secondPayload.stream().anyMatch(m -> m.content().startsWith(MemoryCompressor.SUMMARY_PREFIX)),
+                "the next turn's payload carries the summary");
+        assertTrue(secondPayload.size() < firstPayload.size(),
+                "the compressed payload must be smaller");
 
         // The visible history keeps every turn; only the payload was compressed.
         assertTrue(session.memory().messages().stream().anyMatch(m -> "u0".equals(m.content())),
                 "folded turns must stay in the history");
         assertTrue(session.memory().messages().stream().anyMatch(m -> "a9".equals(m.content())),
                 "folded turns must stay in the history");
-        assertEquals(22, service.history(session).size(),
+        assertEquals(24, service.history(session).size(),
                 "history must show every user/assistant turn, folded or not");
     }
 
@@ -171,7 +184,7 @@ class ChatServiceTest {
                 store,
                 clientProvider(llm),
                 compressorProvider(new MemoryCompressor(llm, 8, 3, null, 4000)),
-                configuredProperties(), List.of(), emptyMcpProvider());
+                configuredProperties(), List.of(), emptyMcpProvider(), testMetrics(), Runnable::run);
 
         assertEquals("REPLY", service.chat(session, "new question", null));
 
@@ -193,7 +206,7 @@ class ChatServiceTest {
 
         RecordingLlm llm = new RecordingLlm();
         ChatService service = new ChatService(
-                store, clientProvider(llm), emptyCompressorProvider(), configuredProperties(), List.of(), emptyMcpProvider());
+                store, clientProvider(llm), emptyCompressorProvider(), configuredProperties(), List.of(), emptyMcpProvider(), testMetrics(), Runnable::run);
 
         assertEquals("REPLY", service.chat(session, "new question", null));
         assertEquals(before + 2, session.messageCount());
@@ -211,7 +224,7 @@ class ChatServiceTest {
         Session session = store.create("ada", null);
         RecordingLlm llm = new RecordingLlm();
         ChatService service = new ChatService(
-                store, clientProvider(llm), emptyCompressorProvider(), configuredProperties(), List.of(), emptyMcpProvider());
+                store, clientProvider(llm), emptyCompressorProvider(), configuredProperties(), List.of(), emptyMcpProvider(), testMetrics(), Runnable::run);
 
         // The reply is already produced; a failed write must not turn it into an error.
         assertEquals("REPLY", service.chat(session, "new question", null));
@@ -245,6 +258,30 @@ class ChatServiceTest {
         ObjectProvider<MemoryCompressor> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(compressor);
         return provider;
+    }
+
+    @Test
+    void historyMapsStoredRefsToImageUrls() {
+        InMemorySessionStore store = new InMemorySessionStore();
+        Session session = store.create("ada", null);
+        session.memory().replaceAll(List.of(
+                ChatMessage.user("look",
+                        List.of("ref:" + session.id() + "/abc123", "data:image/png;base64,AAAA"))));
+
+        RecordingLlm llm = new RecordingLlm();
+        ChatService service = new ChatService(
+                store, clientProvider(llm), emptyCompressorProvider(), configuredProperties(), List.of(),
+                emptyMcpProvider(), testMetrics(), Runnable::run);
+
+        List<String> images = service.history(session).get(0).images();
+        assertEquals(List.of(
+                "/api/v1/sessions/" + session.id() + "/images/abc123",
+                "data:image/png;base64,AAAA"),
+                images);
+    }
+
+    private static TurnMetrics testMetrics() {
+        return new TurnMetrics(new SimpleMeterRegistry());
     }
 
     private static LlmProperties configuredProperties() {

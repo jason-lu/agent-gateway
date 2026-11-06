@@ -113,7 +113,7 @@ By default the full history is sent with every request, so long conversations gr
 - The summary is regenerated incrementally — the previous summary plus the turns that just aged out — so the cost does not grow with the conversation.
 - The summary body is capped at `max-summary-chars` (default 4000): the summarisation call passes the same number as `max_tokens`, and any overlong output is truncated, so the payload stays bounded even over very long sessions.
 - Request layout: `[system prompt][summary][recent turns]`. The summary carries the `【历史对话摘要】` marker and is hidden from `/history` and from `GET /api/v1/sessions/{id}/messages`.
-- Compression runs before the request is built, so the current turn already sees the bounded payload. If the summarisation call fails the history is left untouched and the turn proceeds normally.
+- Compression runs **after** the turn, on a background thread, so the user never waits for the summariser: the turn that crosses the threshold pays one uncompressed payload, and the next turn already sees the folded context. The fold is prepared and applied under the session lock; the summarisation call runs outside it. If the summarisation call fails the history is left untouched and the next turn retries.
 
 The summarisation prompt lives in its own file so it can be tuned without touching code:
 `llm-core/src/main/resources/dev/kualu/llm/summarize-instruction.txt`. Override it per deployment with `AGENT_MEMORY_INSTRUCTION` / `agent.memory.instruction` (a blank value falls back to the file).
@@ -128,6 +128,16 @@ Logs (slf4j; `web` uses logback, `cli` prints to stderr via `slf4j-simple`):
 | Thresholds loaded at startup | `INFO` |
 
 Thresholds are validated at startup: `keep-messages >= 2` and `max-messages > keep-messages + 2`, otherwise the process refuses to start.
+
+### Turn timing (web)
+
+Every request through `SessionController` emits one `turn-timing` INFO line with the per-segment cost of that turn:
+
+```
+turn-timing endpoint=send session=<id> total=2280ms load=120ms(sql=15,decode=105,chars=2150400,count=340) list=- compress=skipped(0ms,summaryChars=0) llm=1800ms(ttft=450ms,rounds=2) persist=340ms(encode=120,write=220,chars=2252800)
+```
+
+Segments that did not run print as `-`. Payload sizes are in characters (JSON length), not bytes. The same segments are recorded into Micrometer (`agent.turn.total|load|list|compress|llm|llm.ttft|persist` timers, `agent.turn.payload.read|write`, `agent.turn.messages`, `agent.turn.llm.rounds` summaries) — tagged by `endpoint` only, never by session. Metrics are served at `/actuator/metrics` and health at `/actuator/health`; `/actuator/**` (except health) requires the `ADMIN` role.
 
 Only the exact command names above are intercepted. Everything else is chat input — including absolute paths (`/usr/lib/jvm/jdk-21.0.5+11/bin/java`), fractions (`1/2`), and other text that contains `/`.
 
@@ -239,6 +249,7 @@ New passwords need at least 8 characters; a wrong `currentPassword` is `400`. Th
 | GET | `/api/v1/sessions/{id}` | USER | Session metadata |
 | DELETE | `/api/v1/sessions/{id}` | USER | Delete session |
 | GET | `/api/v1/sessions/{id}/messages` | USER | Message history |
+| GET | `/api/v1/sessions/{id}/images/{imageId}` | USER | Stored message image (raw bytes) |
 | POST | `/api/v1/sessions/{id}/messages` | USER | `{content, images?}` → `{reply}` |
 | POST | `/api/v1/sessions/{id}/messages/stream` | USER | `{content, images?}` → SSE stream |
 | GET | `/api/v1/admin/users` | ADMIN | List configured users |
@@ -267,10 +278,12 @@ By default (`agent.store=postgres`) users and conversations live in PostgreSQL:
 |---|---|
 | `agent.users` | `username`, bcrypt `password_hash`, `roles text[]` |
 | `agent.sessions` | `id`, `owner` (FK to users), `created_at`, `messages jsonb` |
+| `agent.session_images` | `session_id`, `image_id` (SHA-256 of content), `content` — externalised `data:` images |
 
 - **Schema** is managed by Flyway (`web/src/main/resources/db/migration`), applied at startup in the `agent` schema. Never edit a shipped migration — add `V2__*.sql` instead.
 - **Users** are seeded from `agent.security.users` on first start only (`insert … on conflict do nothing`). After that the database is the source of truth: a password or role changed by hand is never overwritten, and removing a user from config does not delete the account. Changing your own password is `POST /api/v1/auth/change-password` (see [Auth](#auth)); adding a user or resetting someone else's password is SQL for now — there is no admin API for that yet.
 - **The whole conversation** (including any [compression summary](#memory-compression)) is stored as one ordered JSON array per session, so a restart resumes exactly where it left off.
+- **`data:` images are externalised** to `agent.session_images` (content-addressed) and the jsonb carries `ref:<sessionId>/<imageId>` markers instead of pixels, so per-turn writes stay small. History returns the refs as `GET /api/v1/sessions/{id}/images/{imageId}` URLs (fetched with auth), and the LLM request materialises them back into data URIs for vision models. Listings never read the payload at all (`jsonb_array_length` gives the count).
 - **Credentials never live in source.** Put `AGENT_DB_PASSWORD` in `.env` (gitignored) or the environment. The URL must state its TLS intent (`sslmode=require`) because the password would otherwise cross the network in plaintext.
 - **`agent.store=memory`** reverts to process-local storage: no database is contacted at all, and the app warns loudly at startup. Intended for local experiments and tests only.
 

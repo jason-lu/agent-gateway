@@ -61,6 +61,12 @@ agent:
         password: ${AGENT_ADMIN_PASSWORD:change-me}
         roles: [USER, ADMIN]
 
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, metrics
+
 logging:
   level:
     root: INFO

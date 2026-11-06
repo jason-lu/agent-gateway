@@ -2,6 +2,7 @@ package dev.kualu.web.config;
 
 import tools.jackson.databind.ObjectMapper;
 import dev.kualu.llm.tools.ExecTool;
+import dev.kualu.llm.client.ImageSource;
 import dev.kualu.llm.client.LlmClient;
 import dev.kualu.llm.client.LlmConfig;
 import dev.kualu.llm.memory.MemoryCompressor;
@@ -12,6 +13,8 @@ import dev.kualu.web.api.ApiDtos.ErrorResponse;
 import dev.kualu.web.auth.InMemoryRefreshTokenStore;
 import dev.kualu.web.auth.JwtAuthenticationFilter;
 import dev.kualu.web.auth.UserPasswordStore;
+import dev.kualu.web.session.ImageRef;
+import dev.kualu.web.session.SessionStore;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.nio.file.Path;
@@ -109,9 +112,11 @@ public class AppConfig {
                                 "/api/v1/auth/login",
                                 "/api/v1/auth/refresh",
                                 "/api/v1/auth/logout",
-                                "/api/v1/health")
+                                "/api/v1/health",
+                                "/actuator/health")
                         .permitAll()
                         .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
+                        .requestMatchers("/actuator/**").hasRole("ADMIN")
                         .requestMatchers("/api/v1/**").hasRole("USER")
                         .anyRequest().permitAll())
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
@@ -119,15 +124,30 @@ public class AppConfig {
     }
 
     @Bean
-    public LlmClient llmClient(LlmProperties properties) {
+    public ImageSource imageSource(ObjectProvider<SessionStore> stores) {
+        SessionStore store = stores.getIfAvailable();
+        return image -> {
+            if (store != null && ImageRef.isRef(image)) {
+                return store.findImageContent(ImageRef.sessionIdOf(image), ImageRef.imageIdOf(image))
+                        .orElse(image);
+            }
+            return image;
+        };
+    }
+
+    @Bean
+    public LlmClient llmClient(LlmProperties properties, ImageSource imageSource) {
         if (!properties.isConfigured()) {
             return null;
         }
-        return new LlmClient(new LlmConfig(
-                properties.baseUrl(),
-                properties.apiKey(),
-                properties.model(),
-                Duration.ofSeconds(properties.idleTimeoutSeconds())));
+        return new LlmClient(
+                new dev.kualu.http.HttpClient(),
+                new LlmConfig(
+                        properties.baseUrl(),
+                        properties.apiKey(),
+                        properties.model(),
+                        Duration.ofSeconds(properties.idleTimeoutSeconds())),
+                imageSource);
     }
 
     @Bean

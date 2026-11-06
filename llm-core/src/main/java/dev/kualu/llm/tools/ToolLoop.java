@@ -8,6 +8,7 @@ import dev.kualu.llm.ToolCall;
 import dev.kualu.llm.ToolSpec;
 import dev.kualu.llm.client.LlmClient;
 import dev.kualu.llm.memory.ConversationMemory;
+import dev.kualu.llm.metrics.TurnTimings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -129,12 +130,15 @@ public final class ToolLoop {
         try {
             for (int round = 0; round < maxRounds; round++) {
                 streamed.setLength(0);
+                long askStart = System.nanoTime();
                 AssistantTurn turn = ask(payload, delta -> {
+                    TurnTimings.recordFirstDelta();
                     streamed.append(delta);
                     if (onDelta != null) {
                         onDelta.accept(delta);
                     }
                 }, stream, toolSet);
+                TurnTimings.recordLlmRound((System.nanoTime() - askStart) / 1_000_000);
                 reply.append(turn.content());
 
                 if (!turn.hasToolCalls()) {

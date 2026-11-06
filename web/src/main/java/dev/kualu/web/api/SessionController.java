@@ -7,9 +7,11 @@ import dev.kualu.web.api.ApiDtos.SessionResponse;
 import dev.kualu.web.api.ApiDtos.SseDelta;
 import dev.kualu.web.api.ApiDtos.SseDone;
 import dev.kualu.web.api.ApiDtos.SseError;
+import dev.kualu.llm.metrics.TurnTimings;
 import dev.kualu.web.chat.ChatService;
 import dev.kualu.web.chat.LlmNotConfiguredException;
 import dev.kualu.web.chat.SessionNotFoundException;
+import dev.kualu.web.metrics.TurnMetrics;
 import dev.kualu.web.session.Session;
 import dev.kualu.web.session.SessionStore;
 import org.springframework.http.HttpStatus;
@@ -49,17 +51,26 @@ public class SessionController {
 
     private final SessionStore sessionStore;
     private final ChatService chatService;
+    private final TurnMetrics turnMetrics;
 
-    public SessionController(SessionStore sessionStore, ChatService chatService) {
+    public SessionController(SessionStore sessionStore, ChatService chatService, TurnMetrics turnMetrics) {
         this.sessionStore = sessionStore;
         this.chatService = chatService;
+        this.turnMetrics = turnMetrics;
     }
 
     @GetMapping
     public List<SessionResponse> list(@AuthenticationPrincipal String username) {
-        return sessionStore.listByOwner(username).stream()
-                .map(SessionController::toResponse)
-                .toList();
+        TurnTimings timings = TurnTimings.begin();
+        try {
+            return sessionStore.listByOwner(username).stream()
+                    .map(summary -> new SessionResponse(
+                            summary.id(), summary.owner(), summary.createdAt().toString(), summary.messageCount()))
+                    .toList();
+        } finally {
+            turnMetrics.complete("list", "-", timings);
+            TurnTimings.clear();
+        }
     }
 
     @PostMapping
@@ -73,7 +84,13 @@ public class SessionController {
 
     @GetMapping("/{id}")
     public SessionResponse get(@AuthenticationPrincipal String username, @PathVariable String id) {
-        return toResponse(requireSession(username, id));
+        TurnTimings timings = TurnTimings.begin();
+        try {
+            return toResponse(requireSession(username, id));
+        } finally {
+            turnMetrics.complete("get", id, timings);
+            TurnTimings.clear();
+        }
     }
 
     @DeleteMapping("/{id}")
@@ -84,9 +101,43 @@ public class SessionController {
         return ResponseEntity.noContent().build();
     }
 
+    /**
+     * Serves one stored message image as raw bytes. History returns these URLs
+     * (not the pixels) so opening a chat does not transfer every image inline;
+     * the owner check on the session is the authorisation.
+     */
+    @GetMapping("/{id}/images/{imageId}")
+    public ResponseEntity<byte[]> image(
+            @AuthenticationPrincipal String username,
+            @PathVariable String id,
+            @PathVariable String imageId) {
+        requireSession(username, id);
+        String dataUri = sessionStore.findImageContent(id, imageId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "image not found"));
+        return dataUriResponse(dataUri);
+    }
+
+    private static ResponseEntity<byte[]> dataUriResponse(String dataUri) {
+        int semi = dataUri.indexOf(';');
+        int comma = dataUri.indexOf(',');
+        if (!dataUri.startsWith("data:") || semi < 0 || comma < 0 || comma < semi) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "image not found");
+        }
+        byte[] bytes = java.util.Base64.getDecoder().decode(dataUri.substring(comma + 1));
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(dataUri.substring("data:".length(), semi)))
+                .body(bytes);
+    }
+
     @GetMapping("/{id}/messages")
     public List<HistoryMessage> history(@AuthenticationPrincipal String username, @PathVariable String id) {
-        return chatService.history(requireSession(username, id));
+        TurnTimings timings = TurnTimings.begin();
+        try {
+            return chatService.history(requireSession(username, id));
+        } finally {
+            turnMetrics.complete("history", id, timings);
+            TurnTimings.clear();
+        }
     }
 
     @PostMapping("/{id}/messages")
@@ -95,9 +146,15 @@ public class SessionController {
             @PathVariable String id,
             @RequestBody MessageBody body) {
         validate(body);
-        Session session = requireSession(username, id);
-        String reply = chatService.chat(session, body.content(), body.images());
-        return new MessageResponse(reply);
+        TurnTimings timings = TurnTimings.begin();
+        try {
+            Session session = requireSession(username, id);
+            String reply = chatService.chat(session, body.content(), body.images());
+            return new MessageResponse(reply);
+        } finally {
+            turnMetrics.complete("send", id, timings);
+            TurnTimings.clear();
+        }
     }
 
     @PostMapping(value = "/{id}/messages/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -106,7 +163,16 @@ public class SessionController {
             @PathVariable String id,
             @RequestBody MessageBody body) {
         validate(body);
-        Session session = requireSession(username, id);
+        // Bound before the worker thread is created so it inherits this collector;
+        // the load segment records on the request thread, the rest inside the worker.
+        TurnTimings timings = TurnTimings.begin();
+        Session session;
+        try {
+            session = requireSession(username, id);
+        } catch (RuntimeException ex) {
+            TurnTimings.clear();
+            throw ex;
+        }
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
         Thread worker = new Thread(() -> {
             try {
@@ -131,10 +197,16 @@ public class SessionController {
                 } catch (Exception ignored) {
                     emitter.completeWithError(ex);
                 }
+            } finally {
+                turnMetrics.complete("stream", id, timings);
+                TurnTimings.clear();
             }
         }, "chat-sse-" + id);
         worker.setDaemon(true);
         worker.start();
+        // The worker inherited its own binding at construction; clearing here only
+        // releases the servlet thread's slot.
+        TurnTimings.clear();
         return emitter;
     }
 

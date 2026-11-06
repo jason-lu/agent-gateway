@@ -37,6 +37,7 @@ public class LlmClient {
 
     private final HttpClient http;
     private final LlmConfig config;
+    private final ImageSource imageSource;
 
     public LlmClient() {
         this(LlmConfig.fromEnvironment());
@@ -47,8 +48,13 @@ public class LlmClient {
     }
 
     public LlmClient(HttpClient http, LlmConfig config) {
+        this(http, config, ImageSource.passThrough());
+    }
+
+    public LlmClient(HttpClient http, LlmConfig config, ImageSource imageSource) {
         this.http = Objects.requireNonNull(http, "http");
         this.config = Objects.requireNonNull(config, "config");
+        this.imageSource = Objects.requireNonNull(imageSource, "imageSource");
     }
 
     /** Loads credentials from the environment / {@code .env} and uses them. */
@@ -263,9 +269,11 @@ public class LlmClient {
 
     /**
      * {@code content} as a part array: optional text part plus one
-     * {@code image_url} part per image (OpenAI-style vision input).
+     * {@code image_url} part per image (OpenAI-style vision input). Images are
+     * run through the {@link ImageSource} first so store references can be
+     * inlined for the model.
      */
-    private static JsonArray multimodalContent(ChatMessage message) {
+    private JsonArray multimodalContent(ChatMessage message) {
         JsonArray parts = new JsonArray();
         if (!message.content().isBlank()) {
             JsonObject text = new JsonObject();
@@ -275,7 +283,7 @@ public class LlmClient {
         }
         for (String url : message.images()) {
             JsonObject imageUrl = new JsonObject();
-            imageUrl.addProperty("url", url);
+            imageUrl.addProperty("url", imageSource.materialize(url));
             JsonObject image = new JsonObject();
             image.addProperty("type", "image_url");
             image.add("image_url", imageUrl);

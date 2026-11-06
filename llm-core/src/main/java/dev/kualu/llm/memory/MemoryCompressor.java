@@ -3,6 +3,7 @@ package dev.kualu.llm.memory;
 import dev.kualu.llm.ChatMessage;
 import dev.kualu.llm.ToolCall;
 import dev.kualu.llm.client.LlmClient;
+import dev.kualu.llm.metrics.TurnTimings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -105,24 +106,38 @@ public final class MemoryCompressor {
      *                on the console); {@code null} drops the bracketed prefix
      * @return {@code true} when the summary was updated
      */
-    public boolean maybeCompress(ConversationMemory memory, String context) {
+    /**
+     * A pending fold computed by {@link #prepare}: the summarisation request is
+     * ready to send, and {@link #apply} folds it in once the summary text is back.
+     * The plan is computed under the memory lock and applied later; the raw
+     * history only ever grows at the tail, so the cut indices stay valid meanwhile.
+     */
+    public record FoldPlan(
+            int summaryIndex,
+            int tailStartIndex,
+            List<ChatMessage> requestMessages,
+            int maxTokens) {
+    }
+
+    /** Cheap check: does the context sent to the model exceed the threshold? */
+    public boolean shouldCompress(ConversationMemory memory) {
+        Objects.requireNonNull(memory, "memory");
+        return contextSize(memory.messages()) > maxMessages;
+    }
+
+    /**
+     * Computes the fold plan (cut point, summarisation request) without calling
+     * the model. Returns {@code null} when there is nothing to fold.
+     */
+    public FoldPlan prepare(ConversationMemory memory) {
         Objects.requireNonNull(memory, "memory");
         List<ChatMessage> all = memory.messages();
-        String prefix = logPrefix(context);
-
         int systemIndex = !all.isEmpty() && isSystem(all.get(0)) && !isSummary(all.get(0)) ? 0 : -1;
-        int summaryIndex = -1;
-        for (int i = all.size() - 1; i >= 0; i--) {
-            if (isSummary(all.get(i))) {
-                summaryIndex = i;
-                break;
-            }
-        }
+        int summaryIndex = lastSummaryIndex(all);
         List<ChatMessage> tail = all.subList(summaryIndex >= 0 ? summaryIndex + 1 : systemIndex + 1, all.size());
 
-        int contextSize = (systemIndex >= 0 ? 1 : 0) + (summaryIndex >= 0 ? 1 : 0) + tail.size();
-        if (contextSize <= maxMessages) {
-            return false;
+        if (contextSize(all) <= maxMessages) {
+            return null;
         }
 
         int tailStartInTurns = tail.size() - keepMessages;
@@ -131,63 +146,123 @@ public final class MemoryCompressor {
         }
         if (tailStartInTurns <= 0) {
             boolean startsAtUser = !tail.isEmpty() && "user".equals(tail.get(0).role());
-            log.debug("{} skipped: {} (size {})", prefix,
+            log.debug("{} skipped: {} (size {})", logPrefix(null),
                     startsAtUser ? "nothing older to fold" : "no user-turn cut point", all.size());
-            return false;
+            return null;
         }
 
         String previousSummary = summaryIndex >= 0
                 ? all.get(summaryIndex).content().substring(SUMMARY_PREFIX.length())
                 : null;
-        // Raw turns already folded by an earlier compression; they stay in the
-        // history but are only represented by previousSummary in the new summary.
-        List<ChatMessage> folded = summaryIndex >= 0
-                ? List.copyOf(all.subList(systemIndex + 1, summaryIndex))
-                : List.of();
         List<ChatMessage> dropped = List.copyOf(tail.subList(0, tailStartInTurns));
-        List<ChatMessage> kept = List.copyOf(tail.subList(tailStartInTurns, tail.size()));
+        int tailStartIndex = (summaryIndex >= 0 ? summaryIndex + 1 : systemIndex + 1) + tailStartInTurns;
 
-        long startedAt = System.nanoTime();
-        String summaryBody;
-        try {
-            summaryBody = llm.chat(List.of(
-                    ChatMessage.system(instruction + "\n\nCharacter budget: " + maxSummaryChars
-                            + ". Longer output is truncated."),
-                    ChatMessage.user(summarizePrompt(previousSummary, dropped))),
-                    maxSummaryChars);
-        } catch (RuntimeException ex) {
-            String reason = ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName();
-            log.warn("{} FAILED: {}; history left unchanged (size {})",
-                    prefix, reason, all.size(), ex);
+        return new FoldPlan(
+                summaryIndex,
+                tailStartIndex,
+                List.of(
+                        ChatMessage.system(instruction + "\n\nCharacter budget: " + maxSummaryChars
+                                + ". Longer output is truncated."),
+                        ChatMessage.user(summarizePrompt(previousSummary, dropped))),
+                maxSummaryChars);
+    }
+
+    /** Runs the summarisation call for {@code plan}. The caller decides where it runs (inline or async). */
+    public String summarize(FoldPlan plan) {
+        return llm.chat(plan.requestMessages(), plan.maxTokens());
+    }
+
+    /**
+     * Folds {@code plan} into the memory with {@code summaryBody} as the new
+     * summary. Returns {@code false} (history untouched) when the memory no
+     * longer matches the plan — e.g. a concurrent fold already moved the marker.
+     */
+    public boolean apply(ConversationMemory memory, FoldPlan plan, String summaryBody) {
+        List<ChatMessage> all = memory.messages();
+        if (summaryBody == null || summaryBody.isBlank()) {
             return false;
         }
-        long elapsedMs = (System.nanoTime() - startedAt) / 1_000_000;
-
-        if (summaryBody == null || summaryBody.isBlank()) {
-            log.warn("{} FAILED: summariser returned blank text; history left unchanged (size {})",
-                    prefix, all.size());
+        if (all.size() < plan.tailStartIndex() || lastSummaryIndex(all) != plan.summaryIndex()) {
+            log.debug("{}: apply skipped, history moved under the plan (size {})", logPrefix(null), all.size());
             return false;
         }
         if (summaryBody.length() > maxSummaryChars) {
             log.debug("{}: summary truncated to {} chars (was {})",
-                    prefix, maxSummaryChars, summaryBody.length());
+                    logPrefix(null), maxSummaryChars, summaryBody.length());
             summaryBody = truncate(summaryBody, maxSummaryChars);
         }
 
         List<ChatMessage> rebuilt = new ArrayList<>(all.size() + 1);
-        if (systemIndex >= 0) {
-            rebuilt.add(all.get(systemIndex));
+        for (int i = 0; i < plan.tailStartIndex(); i++) {
+            if (i != plan.summaryIndex()) {
+                rebuilt.add(all.get(i));
+            }
         }
-        rebuilt.addAll(folded);
-        rebuilt.addAll(dropped);
         rebuilt.add(buildSummaryMessage(summaryBody));
-        rebuilt.addAll(kept);
+        rebuilt.addAll(all.subList(plan.tailStartIndex(), all.size()));
         memory.replaceAll(rebuilt);
 
-        log.info("{}: context {} -> {} (folded {} turns, summary {} chars, {} ms)",
-                prefix, contextSize, (systemIndex >= 0 ? 1 : 0) + 1 + kept.size(),
-                dropped.size(), summaryBody.length(), elapsedMs);
+        int foldStart = plan.summaryIndex() >= 0 ? plan.summaryIndex() + 1
+                : (!all.isEmpty() && isSystem(all.get(0)) && !isSummary(all.get(0)) ? 1 : 0);
+        int folded = plan.tailStartIndex() - foldStart;
+        log.info("{}: context {} -> {} (folded {} turns, summary {} chars)",
+                logPrefix(null), contextSize(all), contextSize(rebuilt), folded, summaryBody.length());
         return true;
+    }
+
+    /** Synchronous fold: prepare, one summarisation call, apply. */
+    public boolean maybeCompress(ConversationMemory memory, String context) {
+        Objects.requireNonNull(memory, "memory");
+        long checkStartedAt = System.nanoTime();
+        boolean fired = false;
+        int writtenChars = 0;
+        try {
+            FoldPlan plan = prepare(memory);
+            if (plan == null) {
+                return false;
+            }
+            long startedAt = System.nanoTime();
+            String summaryBody;
+            try {
+                summaryBody = llm.chat(plan.requestMessages(), plan.maxTokens());
+            } catch (RuntimeException ex) {
+                String reason = ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName();
+                log.warn("{} FAILED: {}; history left unchanged (size {})",
+                        logPrefix(context), reason, memory.messages().size(), ex);
+                return false;
+            }
+            long elapsedMs = (System.nanoTime() - startedAt) / 1_000_000;
+
+            if (summaryBody == null || summaryBody.isBlank()) {
+                log.warn("{} FAILED: summariser returned blank text; history left unchanged (size {})",
+                        logPrefix(context), memory.messages().size());
+                return false;
+            }
+            fired = apply(memory, plan, summaryBody);
+            writtenChars = fired ? Math.min(summaryBody.length(), maxSummaryChars) : 0;
+            if (fired) {
+                log.info("{}: summarisation call {} ms", logPrefix(context), elapsedMs);
+            }
+            return fired;
+        } finally {
+            TurnTimings.recordCompress((System.nanoTime() - checkStartedAt) / 1_000_000, fired, writtenChars);
+        }
+    }
+
+    private static int contextSize(List<ChatMessage> all) {
+        int systemIndex = !all.isEmpty() && isSystem(all.get(0)) && !isSummary(all.get(0)) ? 0 : -1;
+        int summaryIndex = lastSummaryIndex(all);
+        int tail = all.size() - (summaryIndex >= 0 ? summaryIndex + 1 : systemIndex + 1);
+        return (systemIndex >= 0 ? 1 : 0) + (summaryIndex >= 0 ? 1 : 0) + tail;
+    }
+
+    private static int lastSummaryIndex(List<ChatMessage> all) {
+        for (int i = all.size() - 1; i >= 0; i--) {
+            if (isSummary(all.get(i))) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     /**

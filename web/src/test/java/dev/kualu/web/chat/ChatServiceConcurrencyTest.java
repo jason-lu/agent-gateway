@@ -3,8 +3,10 @@ package dev.kualu.web.chat;
 import dev.kualu.llm.client.LlmClient;
 import dev.kualu.llm.client.LlmConfig;
 import dev.kualu.web.config.LlmProperties;
+import dev.kualu.web.metrics.TurnMetrics;
 import dev.kualu.web.session.InMemorySessionStore;
 import dev.kualu.web.session.Session;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -22,6 +24,10 @@ import static org.mockito.Mockito.when;
 
 class ChatServiceConcurrencyTest {
 
+    private static TurnMetrics testMetrics() {
+        return new TurnMetrics(new SimpleMeterRegistry());
+    }
+
     @Test
     void parallelChatsOnOneSessionDoNotCorruptHistory() throws Exception {
         LlmClient client = mock(LlmClient.class);
@@ -36,7 +42,7 @@ class ChatServiceConcurrencyTest {
                 store,
                 provider(client),
                 emptyCompressorProvider(),
-                new LlmProperties("http://localhost", "key", "model", 90), List.of(), emptyMcpProvider());
+                new LlmProperties("http://localhost", "key", "model", 90), List.of(), emptyMcpProvider(), testMetrics(), Runnable::run);
 
         int workers = 8;
         CountDownLatch start = new CountDownLatch(1);

@@ -5,6 +5,7 @@ import dev.kualu.llm.LlmException;
 import dev.kualu.llm.ToolCall;
 import dev.kualu.llm.client.LlmClient;
 import dev.kualu.llm.client.LlmConfig;
+import dev.kualu.llm.metrics.TurnTimings;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -368,6 +369,75 @@ class MemoryCompressorTest {
         compressor.maybeCompress(memory, "test");
 
         assertEquals(List.of(300), llm.maxTokensCalls);
+    }
+
+    @Test
+    void compressRecordsIntoTurnTimings() {
+        StubLlm llm = new StubLlm();
+        MemoryCompressor compressor = new MemoryCompressor(llm, 6, 2, null, 4000);
+        ConversationMemory memory = conversation(4, "sys");
+
+        TurnTimings timings = TurnTimings.begin();
+        try {
+            assertTrue(compressor.maybeCompress(memory, "test"));
+            assertTrue(timings.compressFired());
+            assertTrue(timings.summaryChars() > 0);
+        } finally {
+            TurnTimings.clear();
+        }
+    }
+
+    @Test
+    void shouldCompressReflectsContextSize() {
+        MemoryCompressor compressor = new MemoryCompressor(new StubLlm(), 6, 2, null, 4000);
+        assertFalse(compressor.shouldCompress(conversation(1, "sys")));
+        assertTrue(compressor.shouldCompress(conversation(4, "sys")));
+    }
+
+    @Test
+    void prepareAndApplyFoldWithoutCallingTheModelInline() {
+        StubLlm llm = new StubLlm();
+        MemoryCompressor compressor = new MemoryCompressor(llm, 6, 2, null, 4000);
+        ConversationMemory memory = conversation(4, "sys");
+
+        MemoryCompressor.FoldPlan plan = compressor.prepare(memory);
+        assertTrue(llm.calls.isEmpty(), "prepare must not call the model");
+        assertEquals(7, plan.tailStartIndex());
+
+        assertTrue(compressor.apply(memory, plan, "FOLDED-SUMMARY"));
+        assertEquals("【历史对话摘要】FOLDED-SUMMARY", memory.context().get(1).content());
+        assertEquals(10, memory.messages().size(), "raw turns survive the fold");
+    }
+
+    @Test
+    void applyKeepsTurnsAppendedWhileTheModelWasThinking() {
+        StubLlm llm = new StubLlm();
+        MemoryCompressor compressor = new MemoryCompressor(llm, 6, 2, null, 4000);
+        ConversationMemory memory = conversation(4, "sys");
+
+        MemoryCompressor.FoldPlan plan = compressor.prepare(memory);
+        memory.addUser("late-question");
+        memory.addAssistant("late-answer");
+
+        assertTrue(compressor.apply(memory, plan, "FOLDED-SUMMARY"));
+        List<ChatMessage> all = memory.messages();
+        assertEquals("late-answer", all.get(all.size() - 1).content());
+        assertTrue(memory.context().stream()
+                .anyMatch(m -> m.content().startsWith(MemoryCompressor.SUMMARY_PREFIX)));
+    }
+
+    @Test
+    void applyIsSkippedWhenTheSummaryMarkerMoved() {
+        StubLlm llm = new StubLlm();
+        MemoryCompressor compressor = new MemoryCompressor(llm, 6, 2, null, 4000);
+        ConversationMemory memory = conversation(4, "sys");
+
+        MemoryCompressor.FoldPlan plan = compressor.prepare(memory);
+        List<ChatMessage> withForeignMarker = new ArrayList<>(memory.messages());
+        withForeignMarker.add(ChatMessage.system(MemoryCompressor.SUMMARY_PREFIX + "other"));
+        memory.replaceAll(withForeignMarker);
+
+        assertFalse(compressor.apply(memory, plan, "FOLDED-SUMMARY"));
     }
 
     @Test

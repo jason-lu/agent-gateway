@@ -146,6 +146,22 @@ class LlmClientTest {
     }
 
     @Test
+    void chat_materializesImagesThroughTheImageSource() {
+        LlmClient client = new LlmClient(new dev.kualu.http.HttpClient(), config,
+                image -> image.startsWith("ref:") ? "data:image/png;base64,MAT" : image);
+
+        client.chat(List.of(ChatMessage.user("what is this?",
+                List.of("ref:sess/img1", "data:image/png;base64,KEEP"))));
+
+        JsonArray parts = JsonParser.parseString(capturedBody.get()).getAsJsonObject()
+                .getAsJsonArray("messages").get(0).getAsJsonObject().getAsJsonArray("content");
+        assertEquals("data:image/png;base64,MAT",
+                parts.get(1).getAsJsonObject().getAsJsonObject("image_url").get("url").getAsString());
+        assertEquals("data:image/png;base64,KEEP",
+                parts.get(2).getAsJsonObject().getAsJsonObject("image_url").get("url").getAsString());
+    }
+
+    @Test
     void chat_imageOnlyMessage_omitsTheBlankTextPart() {
         LlmClient client = new LlmClient(config);
 

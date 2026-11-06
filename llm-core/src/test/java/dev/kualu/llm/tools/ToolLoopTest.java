@@ -9,6 +9,7 @@ import dev.kualu.llm.ToolSpec;
 import dev.kualu.llm.client.LlmClient;
 import dev.kualu.llm.client.LlmConfig;
 import dev.kualu.llm.memory.ConversationMemory;
+import dev.kualu.llm.metrics.TurnTimings;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayDeque;
@@ -129,6 +130,25 @@ class ToolLoopTest {
         List<ChatMessage> secondRequest = llm.requests.get(1);
         assertEquals("assistant", secondRequest.get(1).role());
         assertEquals("tool", secondRequest.get(2).role());
+    }
+
+    @Test
+    void turnTimingsRecordRoundsAndLlmTime() {
+        RecordingTool tool = new RecordingTool();
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.replyWith("", new ToolCall("call_1", "exec", "{\"command\":\"ls\"}"));
+        llm.replyWith("done");
+        ConversationMemory memory = new ConversationMemory();
+
+        TurnTimings timings = TurnTimings.begin();
+        try {
+            new ToolLoop(llm, List.of(tool)).run(memory, "run ls");
+            assertEquals(2, timings.llmRounds());
+            assertTrue(timings.llmMs() >= 0);
+            assertEquals(-1, timings.llmTtftMs(), "non-streamed turns carry no ttft");
+        } finally {
+            TurnTimings.clear();
+        }
     }
 
     @Test

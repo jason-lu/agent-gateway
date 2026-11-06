@@ -13,9 +13,18 @@ public interface SessionStore {
 
     Optional<Session> find(String owner, String sessionId);
 
-    List<Session> listByOwner(String owner);
+    List<SessionSummary> listByOwner(String owner);
 
     boolean delete(String owner, String sessionId);
 
     Session update(Session session);
+
+    /**
+     * Content of an externally stored image (a {@code data:} URI). Stores that
+     * keep images inline in the message payload (memory store) never externalise
+     * and return empty. Callers must have authorised the session first.
+     */
+    default Optional<String> findImageContent(String sessionId, String imageId) {
+        return Optional.empty();
+    }
 }

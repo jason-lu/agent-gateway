@@ -52,10 +52,12 @@ public class InMemorySessionStore implements SessionStore {
     }
 
     @Override
-    public List<Session> listByOwner(String owner) {
+    public List<SessionSummary> listByOwner(String owner) {
         return sessions.values().stream()
                 .filter(session -> session.owner().equals(owner))
                 .sorted(Comparator.comparing(Session::createdAt).reversed())
+                .map(session -> new SessionSummary(
+                        session.id(), session.owner(), session.createdAt(), session.messageCount()))
                 .toList();
     }
 

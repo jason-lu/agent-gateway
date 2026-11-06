@@ -133,6 +133,38 @@ class PostgresPersistenceIntegrationTest {
     }
 
     @Test
+    void imagesAreExternalizedAndResolved() {
+        Session created = store.create("ada", null);
+        created.memory().replaceAll(List.of(
+                ChatMessage.user("look at this", List.of("data:image/png;base64,AAAA"))));
+        store.update(created);
+
+        String json = jdbc.queryForObject(
+                "select messages::text from agent.sessions where id = ?::uuid", String.class, created.id());
+        assertTrue(json.contains("ref:" + created.id() + "/"), json);
+        assertFalse(json.contains("AAAA"), "pixels must not live in the jsonb: " + json);
+
+        Session reloaded = store.find("ada", created.id()).orElseThrow();
+        String ref = reloaded.memory().messages().get(0).images().get(0);
+        assertTrue(ImageRef.isRef(ref), ref);
+        assertEquals("data:image/png;base64,AAAA",
+                store.findImageContent(created.id(), ImageRef.imageIdOf(ref)).orElseThrow());
+
+        // Re-persisting the same image must not duplicate the row.
+        store.update(reloaded);
+        Integer rows = jdbc.queryForObject(
+                "select count(*) from agent.session_images where session_id = ?::uuid",
+                Integer.class, created.id());
+        assertEquals(1, rows);
+
+        store.delete("ada", created.id());
+        Integer afterDelete = jdbc.queryForObject(
+                "select count(*) from agent.session_images where session_id = ?::uuid",
+                Integer.class, created.id());
+        assertEquals(0, afterDelete);
+    }
+
+    @Test
     void historySurvivesRestart() {
         Session created = store.create("ada", null);
         created.memory().addUser("remember me").addAssistant("I will");

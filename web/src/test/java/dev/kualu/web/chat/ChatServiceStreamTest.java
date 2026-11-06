@@ -4,8 +4,10 @@ import dev.kualu.llm.ChatMessage;
 import dev.kualu.llm.client.LlmClient;
 import dev.kualu.llm.client.LlmConfig;
 import dev.kualu.web.config.LlmProperties;
+import dev.kualu.web.metrics.TurnMetrics;
 import dev.kualu.web.session.InMemorySessionStore;
 import dev.kualu.web.session.Session;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -22,6 +24,10 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 class ChatServiceStreamTest {
+
+    private static TurnMetrics testMetrics() {
+        return new TurnMetrics(new SimpleMeterRegistry());
+    }
 
     @Test
     void chatStreamCollectsDeltasAndPersistsTurns() {
@@ -40,7 +46,7 @@ class ChatServiceStreamTest {
                 store,
                 provider(client),
                 emptyCompressorProvider(),
-                new LlmProperties("http://localhost", "key", "model", 90), List.of(), emptyMcpProvider());
+                new LlmProperties("http://localhost", "key", "model", 90), List.of(), emptyMcpProvider(), testMetrics(), Runnable::run);
 
         List<String> deltas = new ArrayList<>();
         String reply = service.chatStream(session, "hi", null, deltas::add);
@@ -62,7 +68,7 @@ class ChatServiceStreamTest {
                 store,
                 provider(client),
                 emptyCompressorProvider(),
-                new LlmProperties("http://localhost", "key", "model", 90), List.of(), emptyMcpProvider());
+                new LlmProperties("http://localhost", "key", "model", 90), List.of(), emptyMcpProvider(), testMetrics(), Runnable::run);
 
         try {
             service.chat(session, "hi", null);
@@ -89,7 +95,7 @@ class ChatServiceStreamTest {
                 store,
                 provider(client),
                 emptyCompressorProvider(),
-                new LlmProperties("http://localhost", "key", "model", 90), List.of(), emptyMcpProvider());
+                new LlmProperties("http://localhost", "key", "model", 90), List.of(), emptyMcpProvider(), testMetrics(), Runnable::run);
 
         List<String> deltas = new ArrayList<>();
         IllegalStateException thrown = assertThrows(
