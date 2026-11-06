@@ -80,8 +80,8 @@ public final class ConversationMemory {
             return messages();
         }
         List<ChatMessage> next = new ArrayList<>(history.size() - fold + 1);
-        if (fold > 0 && isPlainSystem(history.get(0))) {
-            next.add(history.get(0));
+        if (fold > 0 && isPlainSystem(history.getFirst())) {
+            next.add(history.getFirst());
         }
         next.add(history.get(fold));
         next.addAll(history.subList(fold + 1, history.size()));
