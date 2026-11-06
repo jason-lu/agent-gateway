@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="DataSourcePerFileMappings">
+    <file url="file://$PROJECT_DIR$/web/src/main/java/dev/kualu/web/auth/JdbcUserSeeder.java" value="c88f2f1f-f0ad-4993-b159-931fcea75933" />
+  </component>
+</project>
