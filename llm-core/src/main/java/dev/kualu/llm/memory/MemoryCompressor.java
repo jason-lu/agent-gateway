@@ -1,6 +1,7 @@
 package dev.kualu.llm.memory;
 
 import dev.kualu.llm.ChatMessage;
+import dev.kualu.llm.LlmException;
 import dev.kualu.llm.ToolCall;
 import dev.kualu.llm.client.LlmClient;
 import dev.kualu.llm.metrics.TurnTimings;
@@ -14,6 +15,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Supplier;
 
 /**
  * Compresses conversation history into an incremental summary so the request
@@ -58,14 +60,15 @@ public final class MemoryCompressor {
 
     private static final Logger log = LoggerFactory.getLogger(MemoryCompressor.class);
 
-    private final LlmClient llm;
+    private final Supplier<LlmClient> llm;
     private final int maxMessages;
     private final int keepMessages;
     private final String instruction;
     private final int maxSummaryChars;
 
     /**
-     * @param llm             client used for the summarisation call
+     * @param llm             supplier of the client used for the summarisation call;
+     *                        resolved per call so a runtime config change is picked up
      * @param maxMessages     trigger threshold, counted over the context sent to
      *                        the model (system + summary + verbatim tail)
      * @param keepMessages    how many recent turns survive verbatim after compression
@@ -75,7 +78,7 @@ public final class MemoryCompressor {
      *                        truncated so the request payload stays bounded
      * @throws IllegalArgumentException if the thresholds cannot yield a bounded history
      */
-    public MemoryCompressor(LlmClient llm, int maxMessages, int keepMessages, String instruction,
+    public MemoryCompressor(Supplier<LlmClient> llm, int maxMessages, int keepMessages, String instruction,
             int maxSummaryChars) {
         this.llm = Objects.requireNonNull(llm, "llm");
         if (keepMessages < 2) {
@@ -95,6 +98,17 @@ public final class MemoryCompressor {
                 ? DEFAULT_INSTRUCTION
                 : instruction;
         this.maxSummaryChars = maxSummaryChars;
+    }
+
+    /** Convenience overload for a fixed client. */
+    public MemoryCompressor(LlmClient llm, int maxMessages, int keepMessages, String instruction,
+            int maxSummaryChars) {
+        this(fixed(llm), maxMessages, keepMessages, instruction, maxSummaryChars);
+    }
+
+    private static Supplier<LlmClient> fixed(LlmClient llm) {
+        Objects.requireNonNull(llm, "llm");
+        return () -> llm;
     }
 
     /**
@@ -169,7 +183,11 @@ public final class MemoryCompressor {
 
     /** Runs the summarisation call for {@code plan}. The caller decides where it runs (inline or async). */
     public String summarize(FoldPlan plan) {
-        return llm.chat(plan.requestMessages(), plan.maxTokens());
+        LlmClient client = llm.get();
+        if (client == null) {
+            throw new LlmException("LLM is not configured");
+        }
+        return client.chat(plan.requestMessages(), plan.maxTokens());
     }
 
     /**
@@ -224,7 +242,7 @@ public final class MemoryCompressor {
             long startedAt = System.nanoTime();
             String summaryBody;
             try {
-                summaryBody = llm.chat(plan.requestMessages(), plan.maxTokens());
+                summaryBody = summarize(plan);
             } catch (RuntimeException ex) {
                 String reason = ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName();
                 log.warn("{} FAILED: {}; history left unchanged (size {})",

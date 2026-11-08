@@ -2,8 +2,7 @@ package dev.kualu.web.chat;
 
 import dev.kualu.llm.ChatMessage;
 import dev.kualu.llm.client.LlmClient;
-import dev.kualu.llm.client.LlmConfig;
-import dev.kualu.web.config.LlmProperties;
+import dev.kualu.web.llm.LlmSettingsService;
 import dev.kualu.web.metrics.TurnMetrics;
 import dev.kualu.web.session.InMemorySessionStore;
 import dev.kualu.web.session.Session;
@@ -44,9 +43,9 @@ class ChatServiceStreamTest {
         Session session = store.create("ada", null);
         ChatService service = new ChatService(
                 store,
-                provider(client),
+                llmSettings(client),
                 emptyCompressorProvider(),
-                new LlmProperties("http://localhost", "key", "model", 90), List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
+                List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
 
         List<String> deltas = new ArrayList<>();
         String reply = service.chatStream(session, "hi", null, deltas::add);
@@ -66,9 +65,9 @@ class ChatServiceStreamTest {
         Session session = store.create("ada", null);
         ChatService service = new ChatService(
                 store,
-                provider(client),
+                llmSettings(client),
                 emptyCompressorProvider(),
-                new LlmProperties("http://localhost", "key", "model", 90), List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
+                List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
 
         try {
             service.chat(session, "hi", null);
@@ -93,9 +92,9 @@ class ChatServiceStreamTest {
         Session session = store.create("ada", null);
         ChatService service = new ChatService(
                 store,
-                provider(client),
+                llmSettings(client),
                 emptyCompressorProvider(),
-                new LlmProperties("http://localhost", "key", "model", 90), List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
+                List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
 
         List<String> deltas = new ArrayList<>();
         IllegalStateException thrown = assertThrows(
@@ -117,11 +116,11 @@ class ChatServiceStreamTest {
         assertEquals("Hello", persisted.memory().messages().get(1).content());
     }
 
-    @SuppressWarnings("unchecked")
-    private static org.springframework.beans.factory.ObjectProvider<LlmClient> provider(LlmClient client) {
-        var provider = mock(org.springframework.beans.factory.ObjectProvider.class);
-        when(provider.getIfAvailable()).thenReturn(client);
-        return provider;
+    private static LlmSettingsService llmSettings(LlmClient client) {
+        LlmSettingsService settings = mock(LlmSettingsService.class);
+        when(settings.client()).thenReturn(client);
+        when(settings.isConfigured()).thenReturn(true);
+        return settings;
     }
 
     @SuppressWarnings("unchecked")

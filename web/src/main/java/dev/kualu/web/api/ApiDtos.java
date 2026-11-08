@@ -30,6 +30,24 @@ public final class ApiDtos {
     }
 
     /**
+     * Admin LLM upstream overrides plus what is actually in effect. {@code apiKey} is
+     * masked ({@code SettingsController.MASK}) - the real key never leaves the server.
+     * Sources are {@code admin}, {@code env} or {@code none}; {@code configured} is
+     * {@code true} when every effective field has a value.
+     */
+    public record AdminLlmSettingsResponse(
+            String baseUrl,
+            String apiKey,
+            String model,
+            String effectiveBaseUrl,
+            String effectiveModel,
+            String baseUrlSource,
+            String apiKeySource,
+            String modelSource,
+            boolean configured) {
+    }
+
+    /**
      * One user-configured MCP server. {@code env}/{@code headers} values are masked
      * ({@code ••••••••}) — real credentials never leave the server. {@code status} is
      * {@code connected}, {@code disconnected}, {@code disabled} or {@code unknown}.

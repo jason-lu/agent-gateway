@@ -8,7 +8,7 @@ import dev.kualu.llm.metrics.TurnTimings;
 import dev.kualu.llm.tools.ToolLoop;
 import dev.kualu.mcp.McpConnectionManager;
 import dev.kualu.web.api.ApiDtos.HistoryMessage;
-import dev.kualu.web.config.LlmProperties;
+import dev.kualu.web.llm.LlmSettingsService;
 import dev.kualu.web.mcp.UserMcpRegistry;
 import dev.kualu.web.metrics.TurnMetrics;
 import dev.kualu.web.session.ImageRef;
@@ -48,9 +48,8 @@ public class ChatService {
     private static final int TITLE_MAX_CHARS = 40;
 
     private final SessionStore sessionStore;
-    private final LlmClient llmClient;
+    private final LlmSettingsService llmSettings;
     private final MemoryCompressor compressor;
-    private final LlmProperties llmProperties;
     private final List<AgentTool> staticTools;
     private final ObjectProvider<McpConnectionManager> mcpManagers;
     private final ObjectProvider<UserMcpRegistry> userMcpRegistries;
@@ -60,32 +59,29 @@ public class ChatService {
     @Autowired
     public ChatService(
             SessionStore sessionStore,
-            ObjectProvider<LlmClient> llmClients,
+            LlmSettingsService llmSettings,
             ObjectProvider<MemoryCompressor> compressors,
-            LlmProperties llmProperties,
             List<AgentTool> tools,
             ObjectProvider<McpConnectionManager> mcpManagers,
             ObjectProvider<UserMcpRegistry> userMcpRegistries,
             TurnMetrics turnMetrics) {
-        this(sessionStore, llmClients, compressors, llmProperties, tools, mcpManagers, userMcpRegistries,
+        this(sessionStore, llmSettings, compressors, tools, mcpManagers, userMcpRegistries,
                 turnMetrics, newDaemonExecutor());
     }
 
     /** Visible for tests: lets them run compression inline (e.g. {@code Runnable::run}). */
     ChatService(
             SessionStore sessionStore,
-            ObjectProvider<LlmClient> llmClients,
+            LlmSettingsService llmSettings,
             ObjectProvider<MemoryCompressor> compressors,
-            LlmProperties llmProperties,
             List<AgentTool> tools,
             ObjectProvider<McpConnectionManager> mcpManagers,
             ObjectProvider<UserMcpRegistry> userMcpRegistries,
             TurnMetrics turnMetrics,
             Executor compressExecutor) {
         this.sessionStore = sessionStore;
-        this.llmClient = llmClients.getIfAvailable();
+        this.llmSettings = llmSettings;
         this.compressor = compressors.getIfAvailable();
-        this.llmProperties = llmProperties;
         this.staticTools = List.copyOf(tools);
         this.mcpManagers = mcpManagers;
         this.userMcpRegistries = userMcpRegistries;
@@ -130,21 +126,21 @@ public class ChatService {
     }
 
     /** Per-turn loop: the tool list is re-read from the owner's MCP managers on run(). */
-    private ToolLoop toolLoop(String owner) {
-        return new ToolLoop(llmClient, () -> toolsFor(owner));
+    private ToolLoop toolLoop(String owner, LlmClient client) {
+        return new ToolLoop(client, () -> toolsFor(owner));
     }
 
     public boolean isLlmConfigured() {
-        return llmProperties.isConfigured() && llmClient != null;
+        return llmSettings.isConfigured();
     }
 
     public String chat(Session session, String content, List<String> images) {
-        requireLlm();
+        LlmClient client = requireLlm();
         // ConversationMemory is not thread-safe; serialize turns per session.
         synchronized (session.memory()) {
             try {
                 // The tool loop commits the user turn, any tool rounds, and the reply.
-                String reply = toolLoop(session.owner()).run(session.memory(), content, images);
+                String reply = toolLoop(session.owner(), client).run(session.memory(), content, images);
                 persistAppendedQuietly(session);
                 scheduleCompress(session);
                 return reply;
@@ -155,10 +151,10 @@ public class ChatService {
     }
 
     public String chatStream(Session session, String content, List<String> images, Consumer<String> onDelta) {
-        requireLlm();
+        LlmClient client = requireLlm();
         synchronized (session.memory()) {
             try {
-                String reply = toolLoop(session.owner()).run(session.memory(), content, images, onDelta);
+                String reply = toolLoop(session.owner(), client).run(session.memory(), content, images, onDelta);
                 persistAppendedQuietly(session);
                 scheduleCompress(session);
                 return reply;
@@ -287,9 +283,12 @@ public class ChatService {
         return oneLine.length() <= TITLE_MAX_CHARS ? oneLine : oneLine.substring(0, TITLE_MAX_CHARS);
     }
 
-    private void requireLlm() {
-        if (!isLlmConfigured()) {
+    /** The client in effect right now; admin LLM settings take effect without a restart. */
+    private LlmClient requireLlm() {
+        LlmClient client = llmSettings.client();
+        if (client == null) {
             throw new LlmNotConfiguredException("LLM is not configured");
         }
+        return client;
     }
 }

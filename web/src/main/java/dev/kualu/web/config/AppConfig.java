@@ -3,8 +3,6 @@ package dev.kualu.web.config;
 import tools.jackson.databind.ObjectMapper;
 import dev.kualu.llm.tools.ExecTool;
 import dev.kualu.llm.client.ImageSource;
-import dev.kualu.llm.client.LlmClient;
-import dev.kualu.llm.client.LlmConfig;
 import dev.kualu.llm.memory.MemoryCompressor;
 import dev.kualu.mcp.McpConnectionManager;
 import dev.kualu.mcp.McpServerConfig;
@@ -97,6 +95,12 @@ public class AppConfig {
     }
 
     @Bean
+    @ConditionalOnProperty(name = "agent.store", havingValue = "memory")
+    public dev.kualu.web.llm.AdminLlmSettingsStore inMemoryAdminLlmSettingsStore() {
+        return new dev.kualu.web.llm.InMemoryAdminLlmSettingsStore();
+    }
+
+    @Bean
     public AuthenticationManager authenticationManager(AuthenticationConfiguration configuration) throws Exception {
         return configuration.getAuthenticationManager();
     }
@@ -141,37 +145,22 @@ public class AppConfig {
         };
     }
 
-    @Bean
-    public LlmClient llmClient(LlmProperties properties, ImageSource imageSource) {
-        if (!properties.isConfigured()) {
-            return null;
-        }
-        return new LlmClient(
-                new dev.kualu.http.HttpClient(),
-                new LlmConfig(
-                        properties.baseUrl(),
-                        properties.apiKey(),
-                        properties.model(),
-                        Duration.ofSeconds(properties.idleTimeoutSeconds())),
-                imageSource);
-    }
-
+    /**
+     * The client itself comes from {@link dev.kualu.web.llm.LlmSettingsService}
+     * (admin overrides win over {@code llm.*}); it is supplied per call so runtime
+     * config changes are picked up without a restart.
+     */
     @Bean
     public MemoryCompressor memoryCompressor(
-            ObjectProvider<LlmClient> llmClients, MemoryProperties properties) {
+            dev.kualu.web.llm.LlmSettingsService llmSettings, MemoryProperties properties) {
         if (!properties.enabled()) {
             log.info("memory-compress configured: enabled=false");
-            return null;
-        }
-        LlmClient llmClient = llmClients.getIfAvailable();
-        if (llmClient == null) {
-            log.info("memory-compress configured: enabled=true but llm is not configured; compressor inactive");
             return null;
         }
         log.info("memory-compress configured: enabled=true, max-messages={}, keep-messages={}, max-summary-chars={}",
                 properties.maxMessages(), properties.keepMessages(), properties.maxSummaryChars());
         return new MemoryCompressor(
-                llmClient, properties.maxMessages(), properties.keepMessages(), properties.instruction(),
+                llmSettings::client, properties.maxMessages(), properties.keepMessages(), properties.instruction(),
                 properties.maxSummaryChars());
     }
 

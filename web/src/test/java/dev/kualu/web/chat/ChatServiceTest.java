@@ -5,7 +5,7 @@ import dev.kualu.llm.client.LlmClient;
 import dev.kualu.llm.client.LlmConfig;
 import dev.kualu.llm.LlmException;
 import dev.kualu.llm.memory.MemoryCompressor;
-import dev.kualu.web.config.LlmProperties;
+import dev.kualu.web.llm.LlmSettingsService;
 import dev.kualu.web.metrics.TurnMetrics;
 import dev.kualu.web.session.InMemorySessionStore;
 import dev.kualu.web.session.Session;
@@ -69,7 +69,7 @@ class ChatServiceTest {
         session.memory().addAssistant("hi");
         session.memory().addTool("tool", "call-1");
 
-        ChatService service = new ChatService(store, emptyProvider(), emptyCompressorProvider(), configuredProperties(), List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
+        ChatService service = new ChatService(store, emptyLlmSettings(), emptyCompressorProvider(), List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
         var history = service.history(session);
 
         assertEquals(2, history.size());
@@ -83,7 +83,7 @@ class ChatServiceTest {
         Session session = store.create("ada", null);
         RecordingLlm llm = new RecordingLlm();
         ChatService service = new ChatService(
-                store, clientProvider(llm), emptyCompressorProvider(), configuredProperties(), List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
+                store, llmSettings(llm), emptyCompressorProvider(), List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
         List<String> images = List.of("data:image/png;base64,AAAA");
 
         assertEquals("REPLY", service.chat(session, "这是什么？", images));
@@ -104,24 +104,24 @@ class ChatServiceTest {
         InMemorySessionStore store = new InMemorySessionStore();
         Session session = store.create("ada", null);
         ChatService service = new ChatService(
-                store, emptyProvider(), emptyCompressorProvider(), new LlmProperties(null, null, null, 90), List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
+                store, emptyLlmSettings(), emptyCompressorProvider(), List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
 
         assertThrows(LlmNotConfiguredException.class, () -> service.chat(session, "hi", null));
         assertEquals(0, session.messageCount());
     }
 
     @Test
-    void isLlmConfiguredRequiresPropertiesAndClient() {
-        ChatService missingClient = new ChatService(
-                new InMemorySessionStore(), emptyProvider(), emptyCompressorProvider(), configuredProperties(), List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
-        ChatService missingProps = new ChatService(
+    void isLlmConfiguredRequiresAnEffectiveClient() {
+        ChatService unconfigured = new ChatService(
+                new InMemorySessionStore(), emptyLlmSettings(), emptyCompressorProvider(), List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
+        ChatService configured = new ChatService(
                 new InMemorySessionStore(),
-                clientProvider(new LlmClient(new LlmConfig("http://x", "k", "m"))),
+                llmSettings(new LlmClient(new LlmConfig("http://x", "k", "m"))),
                 emptyCompressorProvider(),
-                new LlmProperties(null, null, null, 90), List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
+                List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
 
-        assertFalse(missingClient.isLlmConfigured());
-        assertFalse(missingProps.isLlmConfigured());
+        assertFalse(unconfigured.isLlmConfigured());
+        assertTrue(configured.isLlmConfigured());
     }
 
     @Test
@@ -136,9 +136,9 @@ class ChatServiceTest {
         RecordingLlm llm = new RecordingLlm();
         ChatService service = new ChatService(
                 store,
-                clientProvider(llm),
+                llmSettings(llm),
                 compressorProvider(new MemoryCompressor(llm, 8, 3, null, 4000)),
-                configuredProperties(), List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
+                List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
 
         assertEquals("REPLY", service.chat(session, "new question", null));
 
@@ -182,9 +182,9 @@ class ChatServiceTest {
         llm.summarizeFailure = new LlmException("summariser down");
         ChatService service = new ChatService(
                 store,
-                clientProvider(llm),
+                llmSettings(llm),
                 compressorProvider(new MemoryCompressor(llm, 8, 3, null, 4000)),
-                configuredProperties(), List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
+                List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
 
         assertEquals("REPLY", service.chat(session, "new question", null));
 
@@ -206,7 +206,7 @@ class ChatServiceTest {
 
         RecordingLlm llm = new RecordingLlm();
         ChatService service = new ChatService(
-                store, clientProvider(llm), emptyCompressorProvider(), configuredProperties(), List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
+                store, llmSettings(llm), emptyCompressorProvider(), List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
 
         assertEquals("REPLY", service.chat(session, "new question", null));
         assertEquals(before + 2, session.messageCount());
@@ -224,7 +224,7 @@ class ChatServiceTest {
         Session session = store.create("ada", null);
         RecordingLlm llm = new RecordingLlm();
         ChatService service = new ChatService(
-                store, clientProvider(llm), emptyCompressorProvider(), configuredProperties(), List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
+                store, llmSettings(llm), emptyCompressorProvider(), List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
 
         // The reply is already produced; a failed write must not turn it into an error.
         assertEquals("REPLY", service.chat(session, "new question", null));
@@ -237,7 +237,7 @@ class ChatServiceTest {
         Session session = store.create("ada", null);
         RecordingLlm llm = new RecordingLlm();
         ChatService service = new ChatService(
-                store, clientProvider(llm), emptyCompressorProvider(), configuredProperties(), List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
+                store, llmSettings(llm), emptyCompressorProvider(), List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
 
         service.chat(session, "  帮我看看\n这个项目结构  ", null);
 
@@ -254,16 +254,15 @@ class ChatServiceTest {
         return mock(ObjectProvider.class);
     }
 
-    @SuppressWarnings("unchecked")
-    private static ObjectProvider<LlmClient> emptyProvider() {
-        return clientProvider(null);
+    private static LlmSettingsService llmSettings(LlmClient client) {
+        LlmSettingsService settings = mock(LlmSettingsService.class);
+        when(settings.client()).thenReturn(client);
+        when(settings.isConfigured()).thenReturn(client != null);
+        return settings;
     }
 
-    @SuppressWarnings("unchecked")
-    private static ObjectProvider<LlmClient> clientProvider(LlmClient client) {
-        ObjectProvider<LlmClient> provider = mock(ObjectProvider.class);
-        when(provider.getIfAvailable()).thenReturn(client);
-        return provider;
+    private static LlmSettingsService emptyLlmSettings() {
+        return llmSettings(null);
     }
 
     @SuppressWarnings("unchecked")
@@ -288,7 +287,7 @@ class ChatServiceTest {
 
         RecordingLlm llm = new RecordingLlm();
         ChatService service = new ChatService(
-                store, clientProvider(llm), emptyCompressorProvider(), configuredProperties(), List.of(),
+                store, llmSettings(llm), emptyCompressorProvider(), List.of(),
                 emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
 
         List<String> images = service.history(session).get(0).images();
@@ -300,9 +299,5 @@ class ChatServiceTest {
 
     private static TurnMetrics testMetrics() {
         return new TurnMetrics(new SimpleMeterRegistry());
-    }
-
-    private static LlmProperties configuredProperties() {
-        return new LlmProperties("http://localhost", "key", "model", 90);
     }
 }

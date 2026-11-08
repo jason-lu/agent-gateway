@@ -2,6 +2,7 @@ package dev.kualu.web;
 
 import dev.kualu.llm.client.LlmClient;
 import io.zonky.test.db.postgres.embedded.EmbeddedPostgres;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -64,7 +65,16 @@ class PostgresWebSmokeTest {
     private MockMvc mockMvc;
 
     @MockitoBean
+    private dev.kualu.web.llm.LlmSettingsService llmSettings;
+
+    @MockitoBean
     private LlmClient llmClient;
+
+    @BeforeEach
+    void wireLlm() {
+        when(llmSettings.client()).thenReturn(llmClient);
+        when(llmSettings.isConfigured()).thenReturn(true);
+    }
 
     @Test
     void login_createSession_chat_allWorkAgainstTheDatabase() throws Exception {

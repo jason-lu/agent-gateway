@@ -1,8 +1,7 @@
 package dev.kualu.web.chat;
 
 import dev.kualu.llm.client.LlmClient;
-import dev.kualu.llm.client.LlmConfig;
-import dev.kualu.web.config.LlmProperties;
+import dev.kualu.web.llm.LlmSettingsService;
 import dev.kualu.web.metrics.TurnMetrics;
 import dev.kualu.web.session.InMemorySessionStore;
 import dev.kualu.web.session.Session;
@@ -40,9 +39,9 @@ class ChatServiceConcurrencyTest {
         Session session = store.create("ada", null);
         ChatService service = new ChatService(
                 store,
-                provider(client),
+                llmSettings(client),
                 emptyCompressorProvider(),
-                new LlmProperties("http://localhost", "key", "model", 90), List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
+                List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
 
         int workers = 8;
         CountDownLatch start = new CountDownLatch(1);
@@ -77,11 +76,11 @@ class ChatServiceConcurrencyTest {
         assertTrue(store.find("ada", session.id()).isEmpty());
     }
 
-    @SuppressWarnings("unchecked")
-    private static org.springframework.beans.factory.ObjectProvider<LlmClient> provider(LlmClient client) {
-        var provider = mock(org.springframework.beans.factory.ObjectProvider.class);
-        when(provider.getIfAvailable()).thenReturn(client);
-        return provider;
+    private static LlmSettingsService llmSettings(LlmClient client) {
+        LlmSettingsService settings = mock(LlmSettingsService.class);
+        when(settings.client()).thenReturn(client);
+        when(settings.isConfigured()).thenReturn(true);
+        return settings;
     }
 
     @SuppressWarnings("unchecked")

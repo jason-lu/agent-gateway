@@ -343,7 +343,7 @@ class MemoryCompressorTest {
         assertThrows(IllegalArgumentException.class, () -> new MemoryCompressor(llm, -1, 2, null, 4000));
         assertThrows(IllegalArgumentException.class, () -> new MemoryCompressor(llm, 10, 2, null, 0));
         assertThrows(IllegalArgumentException.class, () -> new MemoryCompressor(llm, 10, 2, null, -1));
-        assertThrows(NullPointerException.class, () -> new MemoryCompressor(null, 10, 2, null, 4000));
+        assertThrows(NullPointerException.class, () -> new MemoryCompressor((LlmClient) null, 10, 2, null, 4000));
     }
 
     @Test

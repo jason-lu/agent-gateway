@@ -1,6 +1,7 @@
 package dev.kualu.web;
 
 import dev.kualu.llm.client.LlmClient;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -42,7 +43,16 @@ class SseStreamIntegrationTest {
     private MockMvc mockMvc;
 
     @MockitoBean
+    private dev.kualu.web.llm.LlmSettingsService llmSettings;
+
+    @MockitoBean
     private LlmClient llmClient;
+
+    @BeforeEach
+    void wireLlm() {
+        when(llmSettings.client()).thenReturn(llmClient);
+        when(llmSettings.isConfigured()).thenReturn(true);
+    }
 
     @Test
     void streamEmitsDeltaThenDone() throws Exception {
