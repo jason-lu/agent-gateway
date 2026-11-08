@@ -3,6 +3,8 @@ package dev.kualu.web.api;
 import dev.kualu.web.api.ApiDtos.ErrorResponse;
 import dev.kualu.web.chat.LlmNotConfiguredException;
 import dev.kualu.web.chat.UpstreamLlmException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -14,6 +16,8 @@ import org.springframework.web.server.ResponseStatusException;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorResponse> handleValidation(MethodArgumentNotValidException ex) {
@@ -36,6 +40,8 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(UpstreamLlmException.class)
     public ResponseEntity<ErrorResponse> handleUpstream(UpstreamLlmException ex) {
+        // The response body carries the upstream message; the log keeps it server-side too.
+        log.warn("upstream llm call failed: {}", ex.getMessage());
         return body(HttpStatus.BAD_GATEWAY, ex.getMessage());
     }
 
@@ -51,6 +57,7 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleGeneric(Exception ex) {
+        log.error("unhandled request failure", ex);
         return body(HttpStatus.INTERNAL_SERVER_ERROR, "internal error");
     }
 

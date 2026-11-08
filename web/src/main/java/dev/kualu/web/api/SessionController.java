@@ -14,6 +14,8 @@ import dev.kualu.web.chat.SessionNotFoundException;
 import dev.kualu.web.metrics.TurnMetrics;
 import dev.kualu.web.session.Session;
 import dev.kualu.web.session.SessionStore;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -34,6 +36,8 @@ import java.util.concurrent.TimeUnit;
 @RestController
 @RequestMapping("/api/v1/sessions")
 public class SessionController {
+
+    private static final Logger log = LoggerFactory.getLogger(SessionController.class);
 
     /**
      * Tomcat's connector-wide async timeout is 30s from the moment the async request
@@ -192,6 +196,13 @@ public class SessionController {
                         : (ex instanceof dev.kualu.web.chat.UpstreamLlmException
                                 ? ex.getMessage()
                                 : "stream failed");
+                // The event below reaches only the caller; the server log is the
+                // place an operator sees why turns keep failing.
+                if (ex instanceof dev.kualu.web.chat.UpstreamLlmException || ex instanceof LlmNotConfiguredException) {
+                    log.warn("chat stream failed for session={}: {}", id, message);
+                } else {
+                    log.warn("chat stream failed for session={}", id, ex);
+                }
                 try {
                     emitter.send(SseEmitter.event().name("error").data(new SseError(message)));
                     emitter.complete();
