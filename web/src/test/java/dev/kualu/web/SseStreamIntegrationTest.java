@@ -50,7 +50,7 @@ class SseStreamIntegrationTest {
 
     @BeforeEach
     void wireLlm() {
-        when(llmSettings.client()).thenReturn(llmClient);
+        when(llmSettings.clientFor(any(), any(), any())).thenReturn(llmClient);
         when(llmSettings.isConfigured()).thenReturn(true);
     }
 

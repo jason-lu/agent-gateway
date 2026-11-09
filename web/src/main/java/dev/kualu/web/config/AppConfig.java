@@ -96,8 +96,25 @@ public class AppConfig {
 
     @Bean
     @ConditionalOnProperty(name = "agent.store", havingValue = "memory")
-    public dev.kualu.web.llm.AdminLlmSettingsStore inMemoryAdminLlmSettingsStore() {
-        return new dev.kualu.web.llm.InMemoryAdminLlmSettingsStore();
+    public dev.kualu.web.llm.LlmProviderStore inMemoryLlmProviderStore() {
+        return new dev.kualu.web.llm.InMemoryLlmProviderStore();
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "agent.store", havingValue = "memory")
+    public dev.kualu.web.llm.UserLlmPreferenceStore inMemoryUserLlmPreferenceStore() {
+        return new dev.kualu.web.llm.InMemoryUserLlmPreferenceStore();
+    }
+
+    /**
+     * Seeds the primary provider from {@code llm.*} when the store is empty, so a fresh
+     * deployment works before anyone opens the admin UI. Runs after Flyway (which is a
+     * bean-lifecycle concern), hence as an {@link org.springframework.boot.ApplicationRunner}.
+     */
+    @Bean
+    public dev.kualu.web.llm.LlmProviderSeeder llmProviderSeeder(
+            dev.kualu.web.llm.LlmProviderStore store, LlmProperties properties) {
+        return new dev.kualu.web.llm.LlmProviderSeeder(store, properties);
     }
 
     @Bean
@@ -147,7 +164,7 @@ public class AppConfig {
 
     /**
      * The client itself comes from {@link dev.kualu.web.llm.LlmSettingsService}
-     * (admin overrides win over {@code llm.*}); it is supplied per call so runtime
+     * (the primary provider's default model); it is supplied per call so runtime
      * config changes are picked up without a restart.
      */
     @Bean
@@ -160,7 +177,7 @@ public class AppConfig {
         log.info("memory-compress configured: enabled=true, max-messages={}, keep-messages={}, max-summary-chars={}",
                 properties.maxMessages(), properties.keepMessages(), properties.maxSummaryChars());
         return new MemoryCompressor(
-                llmSettings::client, properties.maxMessages(), properties.keepMessages(), properties.instruction(),
+                llmSettings::defaultClient, properties.maxMessages(), properties.keepMessages(), properties.instruction(),
                 properties.maxSummaryChars());
     }
 

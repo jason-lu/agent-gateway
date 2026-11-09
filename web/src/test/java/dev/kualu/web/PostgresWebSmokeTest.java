@@ -15,6 +15,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.io.IOException;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -72,7 +73,7 @@ class PostgresWebSmokeTest {
 
     @BeforeEach
     void wireLlm() {
-        when(llmSettings.client()).thenReturn(llmClient);
+        when(llmSettings.clientFor(any(), any(), any())).thenReturn(llmClient);
         when(llmSettings.isConfigured()).thenReturn(true);
     }
 

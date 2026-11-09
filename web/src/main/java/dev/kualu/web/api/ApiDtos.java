@@ -30,29 +30,66 @@ public final class ApiDtos {
     }
 
     /**
-     * Admin LLM upstream overrides plus what is actually in effect. {@code apiKey} is
-     * masked ({@code SettingsController.MASK}) - the real key never leaves the server.
-     * Sources are {@code admin}, {@code env} or {@code none}; {@code configured} is
-     * {@code true} when every effective field has a value.
+     * One admin-configured LLM provider: a connection (base URL + API key) and the
+     * model IDs it offers. {@code apiKey} is masked ({@code SettingsController.MASK})
+     * — the real key never leaves the server. {@code primary} marks the deployment
+     * default used by users who have not picked a model.
      */
-    public record AdminLlmSettingsResponse(
+    public record LlmProviderResponse(
+            String id,
+            String name,
             String baseUrl,
             String apiKey,
-            String model,
-            String effectiveBaseUrl,
-            String effectiveModel,
-            String baseUrlSource,
-            String apiKeySource,
-            String modelSource,
-            boolean configured) {
+            List<String> models,
+            String defaultModel,
+            boolean primary) {
     }
 
     /**
-     * Model IDs detected on the configured LLM upstream (OpenAI-compatible
-     * {@code GET /models}); feeds the admin dropdown so the model name needs no
-     * manual entry.
+     * Create/update body for a provider. {@code apiKey} follows the mask convention:
+     * {@code SettingsController.MASK} (or a blank) keeps the stored key on update,
+     * anything else replaces it; create needs a real key.
+     */
+    public record LlmProviderBody(
+            String name,
+            String baseUrl,
+            String apiKey,
+            List<String> models,
+            String defaultModel) {
+    }
+
+    /**
+     * Draft connection for a model probe: {@code id} optionally anchors the merge to a
+     * stored provider (so the mask/blank keeps its key), and the remaining fields are
+     * what the admin form currently holds.
+     */
+    public record LlmProviderProbeBody(String id, String baseUrl, String apiKey) {
+    }
+
+    /**
+     * Model IDs detected on the probed upstream (OpenAI-compatible {@code GET /models});
+     * feeds the admin model list so names need no manual entry.
      */
     public record AdminLlmModelsResponse(List<String> models) {
+    }
+
+    /** One pickable model in the chat window: which provider offers it and under what name. */
+    public record LlmModelOption(String providerId, String providerName, String model) {
+    }
+
+    /** A concrete (provider, model) choice — what a user picks and what a turn uses. */
+    public record LlmModelChoice(String providerId, String model) {
+    }
+
+    /**
+     * The chat-window model picker: every pair on offer, the deployment default
+     * (primary provider's default model), and the caller's effective selection —
+     * their saved choice when it is still on offer, else the default.
+     */
+    public record LlmModelCatalogResponse(
+            List<LlmModelOption> models,
+            LlmModelChoice defaultChoice,
+            LlmModelChoice selected) {
     }
 
     /**

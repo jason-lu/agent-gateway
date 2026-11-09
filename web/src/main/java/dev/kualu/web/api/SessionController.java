@@ -154,7 +154,7 @@ public class SessionController {
         TurnTimings timings = TurnTimings.begin();
         try {
             Session session = requireSession(username, id);
-            String reply = chatService.chat(session, body.content(), body.images());
+            String reply = chatService.chat(session, body.content(), body.images(), body.providerId(), body.model());
             return new MessageResponse(reply);
         } finally {
             turnMetrics.complete("send", id, timings);
@@ -181,7 +181,8 @@ public class SessionController {
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
         Thread worker = new Thread(() -> {
             try {
-                String reply = chatService.chatStream(session, body.content(), body.images(), delta -> {
+                String reply = chatService.chatStream(session, body.content(), body.images(),
+                        body.providerId(), body.model(), delta -> {
                     try {
                         emitter.send(SseEmitter.event().name("delta").data(new SseDelta(delta)));
                     } catch (Exception ex) {
@@ -271,11 +272,14 @@ public class SessionController {
     }
 
     /**
-     * @param content user text; {@code null} is normalized to blank (image-only turns)
-     * @param images  image URLs or {@code data:image/...} URIs for vision models;
-     *                {@code null} is normalized to an empty list
+     * @param content    user text; {@code null} is normalized to blank (image-only turns)
+     * @param images     image URLs or {@code data:image/...} URIs for vision models;
+     *                   {@code null} is normalized to an empty list
+     * @param providerId the provider the chat window picked (optional); {@code null} or an
+     *                   unknown pair falls back to the saved choice and then the default
+     * @param model      the model the chat window picked (optional), see {@code providerId}
      */
-    public record MessageBody(String content, List<String> images) {
+    public record MessageBody(String content, List<String> images, String providerId, String model) {
 
         public MessageBody {
             content = content == null ? "" : content;

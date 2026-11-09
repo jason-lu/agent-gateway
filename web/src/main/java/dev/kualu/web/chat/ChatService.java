@@ -134,8 +134,13 @@ public class ChatService {
         return llmSettings.isConfigured();
     }
 
-    public String chat(Session session, String content, List<String> images) {
-        LlmClient client = requireLlm();
+    /**
+     * One turn, picking the upstream from the requested (provider, model) — see
+     * {@link LlmSettingsService#clientFor}. Falls back to the owner's saved choice
+     * and then to the primary provider's default model.
+     */
+    public String chat(Session session, String content, List<String> images, String providerId, String model) {
+        LlmClient client = requireLlm(session.owner(), providerId, model);
         // ConversationMemory is not thread-safe; serialize turns per session.
         synchronized (session.memory()) {
             try {
@@ -150,8 +155,9 @@ public class ChatService {
         }
     }
 
-    public String chatStream(Session session, String content, List<String> images, Consumer<String> onDelta) {
-        LlmClient client = requireLlm();
+    public String chatStream(Session session, String content, List<String> images, String providerId, String model,
+            Consumer<String> onDelta) {
+        LlmClient client = requireLlm(session.owner(), providerId, model);
         synchronized (session.memory()) {
             try {
                 String reply = toolLoop(session.owner(), client).run(session.memory(), content, images, onDelta);
@@ -283,9 +289,13 @@ public class ChatService {
         return oneLine.length() <= TITLE_MAX_CHARS ? oneLine : oneLine.substring(0, TITLE_MAX_CHARS);
     }
 
-    /** The client in effect right now; admin LLM settings take effect without a restart. */
-    private LlmClient requireLlm() {
-        LlmClient client = llmSettings.client();
+    /**
+     * The client for this turn: the requested (provider, model) when still on offer,
+     * else the owner's saved choice, else the primary's default. Admin provider
+     * edits take effect without a restart.
+     */
+    private LlmClient requireLlm(String owner, String providerId, String model) {
+        LlmClient client = llmSettings.clientFor(owner, providerId, model);
         if (client == null) {
             throw new LlmNotConfiguredException("LLM is not configured");
         }

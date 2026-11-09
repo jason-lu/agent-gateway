@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -86,7 +87,7 @@ class ChatServiceTest {
                 store, llmSettings(llm), emptyCompressorProvider(), List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
         List<String> images = List.of("data:image/png;base64,AAAA");
 
-        assertEquals("REPLY", service.chat(session, "这是什么？", images));
+        assertEquals("REPLY", service.chat(session, "这是什么？", images, null, null));
 
         List<ChatMessage> payload = llm.replyPayloads.get(0);
         ChatMessage sentUser = payload.get(payload.size() - 1);
@@ -106,7 +107,7 @@ class ChatServiceTest {
         ChatService service = new ChatService(
                 store, emptyLlmSettings(), emptyCompressorProvider(), List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
 
-        assertThrows(LlmNotConfiguredException.class, () -> service.chat(session, "hi", null));
+        assertThrows(LlmNotConfiguredException.class, () -> service.chat(session, "hi", null, null, null));
         assertEquals(0, session.messageCount());
     }
 
@@ -140,7 +141,7 @@ class ChatServiceTest {
                 compressorProvider(new MemoryCompressor(llm, 8, 3, null, 4000)),
                 List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
 
-        assertEquals("REPLY", service.chat(session, "new question", null));
+        assertEquals("REPLY", service.chat(session, "new question", null, null, null));
 
         // The triggering turn runs with the uncompressed history — it must not
         // wait for the summariser.
@@ -153,7 +154,7 @@ class ChatServiceTest {
         assertTrue(session.memory().context().stream()
                         .anyMatch(m -> m.content().startsWith(MemoryCompressor.SUMMARY_PREFIX)),
                 "compression runs right after the turn");
-        assertEquals("REPLY", service.chat(session, "follow up", null));
+        assertEquals("REPLY", service.chat(session, "follow up", null, null, null));
         List<ChatMessage> secondPayload = llm.replyPayloads.get(1);
         assertTrue(secondPayload.stream().anyMatch(m -> m.content().startsWith(MemoryCompressor.SUMMARY_PREFIX)),
                 "the next turn's payload carries the summary");
@@ -186,7 +187,7 @@ class ChatServiceTest {
                 compressorProvider(new MemoryCompressor(llm, 8, 3, null, 4000)),
                 List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
 
-        assertEquals("REPLY", service.chat(session, "new question", null));
+        assertEquals("REPLY", service.chat(session, "new question", null, null, null));
 
         // History grew by the new turn and no summary was written.
         assertEquals(23, session.messageCount());
@@ -208,7 +209,7 @@ class ChatServiceTest {
         ChatService service = new ChatService(
                 store, llmSettings(llm), emptyCompressorProvider(), List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
 
-        assertEquals("REPLY", service.chat(session, "new question", null));
+        assertEquals("REPLY", service.chat(session, "new question", null, null, null));
         assertEquals(before + 2, session.messageCount());
         assertEquals(before + 1, llm.replyPayloads.get(0).size());
     }
@@ -227,7 +228,7 @@ class ChatServiceTest {
                 store, llmSettings(llm), emptyCompressorProvider(), List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
 
         // The reply is already produced; a failed write must not turn it into an error.
-        assertEquals("REPLY", service.chat(session, "new question", null));
+        assertEquals("REPLY", service.chat(session, "new question", null, null, null));
         assertEquals(2, session.messageCount());
     }
 
@@ -239,7 +240,7 @@ class ChatServiceTest {
         ChatService service = new ChatService(
                 store, llmSettings(llm), emptyCompressorProvider(), List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
 
-        service.chat(session, "  帮我看看\n这个项目结构  ", null);
+        service.chat(session, "  帮我看看\n这个项目结构  ", null, null, null);
 
         assertEquals("帮我看看 这个项目结构", session.title());
     }
@@ -256,7 +257,7 @@ class ChatServiceTest {
 
     private static LlmSettingsService llmSettings(LlmClient client) {
         LlmSettingsService settings = mock(LlmSettingsService.class);
-        when(settings.client()).thenReturn(client);
+        when(settings.clientFor(any(), any(), any())).thenReturn(client);
         when(settings.isConfigured()).thenReturn(client != null);
         return settings;
     }

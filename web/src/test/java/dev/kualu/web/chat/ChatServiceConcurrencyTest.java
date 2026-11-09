@@ -17,6 +17,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -51,7 +52,7 @@ class ChatServiceConcurrencyTest {
             for (int i = 0; i < workers; i++) {
                 futures.add(pool.submit(() -> {
                     start.await();
-                    service.chat(session, "hello", null);
+                    service.chat(session, "hello", null, null, null);
                     return null;
                 }));
             }
@@ -78,7 +79,7 @@ class ChatServiceConcurrencyTest {
 
     private static LlmSettingsService llmSettings(LlmClient client) {
         LlmSettingsService settings = mock(LlmSettingsService.class);
-        when(settings.client()).thenReturn(client);
+        when(settings.clientFor(any(), any(), any())).thenReturn(client);
         when(settings.isConfigured()).thenReturn(true);
         return settings;
     }

@@ -3,7 +3,7 @@ package dev.kualu.web;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import dev.kualu.web.api.SettingsController;
-import dev.kualu.web.llm.AdminLlmSettingsStore;
+import dev.kualu.web.llm.LlmProviderStore;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -11,8 +11,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.io.IOException;
@@ -26,15 +24,13 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.contains;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Model discovery on the admin LLM settings: {@code POST /api/v1/admin/llm-settings/models}
+ * Model discovery for the admin provider form: {@code POST /api/v1/admin/llm-providers/models}
  * probes the OpenAI-compatible {@code GET /models} of the connection the form holds —
- * draft values merged over the stored overrides, environment as fallback — and returns
- * the IDs for the admin dropdown. The model name itself is never required.
+ * draft values, with {@code id} anchoring the merge so the mask keeps a stored key.
  */
 @SpringBootTest(properties = {
         "agent.store=memory",
@@ -45,123 +41,120 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "agent.security.users[1].username=boss",
         "agent.security.users[1].password=password123",
         "agent.security.users[1].roles[0]=USER",
-        "agent.security.users[1].roles[1]=ADMIN",
-        "llm.api-key=env-secret",
-        "llm.model=env-model"
+        "agent.security.users[1].roles[1]=ADMIN"
 })
 @AutoConfigureMockMvc
 class AdminLlmModelsIntegrationTest {
 
-    private static final AtomicReference<String> envAuth = new AtomicReference<>();
-    private static final AtomicReference<String> otherAuth = new AtomicReference<>();
+    private static final AtomicReference<String> draftAuth = new AtomicReference<>();
+    private static final AtomicReference<String> storedAuth = new AtomicReference<>();
 
-    /** What the environment configuration points at. */
-    private static final HttpServer ENV_UPSTREAM = modelsServer(List.of("env-model-a", "env-model-b"), envAuth);
-    /** What a draft or stored override can point at instead. */
-    private static final HttpServer OTHER_UPSTREAM = modelsServer(List.of("draft-model-x"), otherAuth);
-
-    @DynamicPropertySource
-    static void envConnection(DynamicPropertyRegistry registry) {
-        registry.add("llm.base-url",
-                () -> "http://127.0.0.1:" + ENV_UPSTREAM.getAddress().getPort() + "/v1");
-    }
+    /** What a draft connection (the admin form typing fresh values) points at. */
+    private static final HttpServer DRAFT_UPSTREAM = modelsServer(List.of("draft-model-x", "draft-model-y"), draftAuth);
+    /** What a stored provider row points at. */
+    private static final HttpServer STORED_UPSTREAM = modelsServer(List.of("stored-model-a"), storedAuth);
 
     @Autowired
     private MockMvc mockMvc;
 
     @Autowired
-    private AdminLlmSettingsStore store;
+    private LlmProviderStore store;
 
     @BeforeEach
     void reset() {
-        store.delete();
-        envAuth.set(null);
-        otherAuth.set(null);
+        store.findAll().forEach(provider -> store.delete(provider.id()));
+        draftAuth.set(null);
+        storedAuth.set(null);
     }
 
     @AfterAll
     static void stopUpstreams() {
-        ENV_UPSTREAM.stop(0);
-        OTHER_UPSTREAM.stop(0);
+        DRAFT_UPSTREAM.stop(0);
+        STORED_UPSTREAM.stop(0);
     }
 
     @Test
     void requiresAdminRole() throws Exception {
-        mockMvc.perform(post("/api/v1/admin/llm-settings/models"))
+        mockMvc.perform(post("/api/v1/admin/llm-providers/models"))
                 .andExpect(status().isUnauthorized());
 
-        mockMvc.perform(post("/api/v1/admin/llm-settings/models")
+        mockMvc.perform(post("/api/v1/admin/llm-providers/models")
                         .header("Authorization", "Bearer " + login("alice")))
                 .andExpect(status().isForbidden());
     }
 
     @Test
-    void listsModelsFromTheEffectiveConnection() throws Exception {
-        mockMvc.perform(post("/api/v1/admin/llm-settings/models")
-                        .header("Authorization", "Bearer " + login("boss")))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.models", contains("env-model-a", "env-model-b")));
-
-        assertThat(envAuth.get()).isEqualTo("Bearer env-secret");
-    }
-
-    @Test
     void draftConnectionListsFromThatUpstream() throws Exception {
-        mockMvc.perform(post("/api/v1/admin/llm-settings/models")
+        mockMvc.perform(post("/api/v1/admin/llm-providers/models")
                         .header("Authorization", "Bearer " + login("boss"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"baseUrl":"http://127.0.0.1:%d/v1","apiKey":"draft-key"}
-                                """.formatted(OTHER_UPSTREAM.getAddress().getPort())))
+                                """.formatted(port(DRAFT_UPSTREAM))))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.models", contains("draft-model-x")));
+                .andExpect(jsonPath("$.models", contains("draft-model-x", "draft-model-y")));
 
-        assertThat(otherAuth.get()).isEqualTo("Bearer draft-key");
-        assertThat(envAuth.get()).isNull();
+        assertThat(draftAuth.get()).isEqualTo("Bearer draft-key");
     }
 
     @Test
-    void maskKeepsTheStoredKeyWhileBlankUrlFallsBackToEnv() throws Exception {
+    void maskAndBlankMergeOverTheStoredProvider() throws Exception {
         String token = login("boss");
-        putSettings(token, "http://127.0.0.1:" + OTHER_UPSTREAM.getAddress().getPort() + "/v1", "stored-secret");
+        String id = createProvider(token);
 
-        mockMvc.perform(post("/api/v1/admin/llm-settings/models")
+        // The mask keeps the stored key; the blank base URL keeps the stored URL.
+        mockMvc.perform(post("/api/v1/admin/llm-providers/models")
                         .header("Authorization", "Bearer " + token)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"baseUrl":"","apiKey":"%s"}
-                                """.formatted(SettingsController.MASK)))
+                                {"id":"%s","baseUrl":"","apiKey":"%s"}
+                                """.formatted(id, SettingsController.MASK)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.models", contains("env-model-a", "env-model-b")));
+                .andExpect(jsonPath("$.models", contains("stored-model-a")));
 
-        // Blank cleared the stored base URL (environment wins) but the mask kept the key.
-        assertThat(envAuth.get()).isEqualTo("Bearer stored-secret");
+        assertThat(storedAuth.get()).isEqualTo("Bearer stored-secret");
+        assertThat(draftAuth.get()).isNull();
     }
 
     @Test
     void typedKeyReplacesTheStoredKey() throws Exception {
         String token = login("boss");
-        putSettings(token, "http://127.0.0.1:" + OTHER_UPSTREAM.getAddress().getPort() + "/v1", "stored-secret");
+        String id = createProvider(token);
 
-        mockMvc.perform(post("/api/v1/admin/llm-settings/models")
+        mockMvc.perform(post("/api/v1/admin/llm-providers/models")
                         .header("Authorization", "Bearer " + token)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"apiKey":"typed-key"}
-                                """))
+                                {"id":"%s","apiKey":"typed-key"}
+                                """.formatted(id)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.models", contains("draft-model-x")));
+                .andExpect(jsonPath("$.models", contains("stored-model-a")));
 
-        assertThat(otherAuth.get()).isEqualTo("Bearer typed-key");
+        assertThat(storedAuth.get()).isEqualTo("Bearer typed-key");
+    }
+
+    @Test
+    void probeWithoutAnyConnectionIsServiceUnavailable() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/llm-providers/models")
+                        .header("Authorization", "Bearer " + login("boss")))
+                .andExpect(status().isServiceUnavailable());
+
+        mockMvc.perform(post("/api/v1/admin/llm-providers/models")
+                        .header("Authorization", "Bearer " + login("boss"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"baseUrl":"https://half.example.com/v1"}
+                                """))
+                .andExpect(status().isServiceUnavailable());
     }
 
     @Test
     void unreachableUpstreamIsReportedAsBadGateway() throws Exception {
         HttpServer dead = modelsServer(List.of("unreachable"), new AtomicReference<>());
-        int port = dead.getAddress().getPort();
+        int port = port(dead);
         dead.stop(0);
 
-        mockMvc.perform(post("/api/v1/admin/llm-settings/models")
+        mockMvc.perform(post("/api/v1/admin/llm-providers/models")
                         .header("Authorization", "Bearer " + login("boss"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -170,14 +163,21 @@ class AdminLlmModelsIntegrationTest {
                 .andExpect(status().isBadGateway());
     }
 
-    private void putSettings(String token, String baseUrl, String apiKey) throws Exception {
-        mockMvc.perform(put("/api/v1/admin/llm-settings")
+    private String createProvider(String token) throws Exception {
+        var result = mockMvc.perform(post("/api/v1/admin/llm-providers")
                         .header("Authorization", "Bearer " + token)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"baseUrl":"%s","apiKey":"%s","model":"stored-model"}
-                                """.formatted(baseUrl, apiKey)))
-                .andExpect(status().isOk());
+                                {"name":"stored","baseUrl":"http://127.0.0.1:%d/v1",
+                                 "apiKey":"stored-secret","models":["stored-model-a"],"defaultModel":"stored-model-a"}
+                                """.formatted(port(STORED_UPSTREAM))))
+                .andExpect(status().isCreated())
+                .andReturn();
+        return com.jayway.jsonpath.JsonPath.read(result.getResponse().getContentAsString(), "$.id");
+    }
+
+    private static int port(HttpServer server) {
+        return server.getAddress().getPort();
     }
 
     private String login(String username) throws Exception {

@@ -48,7 +48,7 @@ class ChatServiceStreamTest {
                 List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
 
         List<String> deltas = new ArrayList<>();
-        String reply = service.chatStream(session, "hi", null, deltas::add);
+        String reply = service.chatStream(session, "hi", null, null, null, deltas::add);
 
         assertEquals("Hello", reply);
         assertEquals(List.of("Hel", "lo"), deltas);
@@ -70,7 +70,7 @@ class ChatServiceStreamTest {
                 List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
 
         try {
-            service.chat(session, "hi", null);
+            service.chat(session, "hi", null, null, null);
         } catch (UpstreamLlmException expected) {
             assertTrue(expected.getMessage().contains("boom"));
         }
@@ -99,7 +99,7 @@ class ChatServiceStreamTest {
         List<String> deltas = new ArrayList<>();
         IllegalStateException thrown = assertThrows(
                 IllegalStateException.class,
-                () -> service.chatStream(session, "hi", null, delta -> {
+                () -> service.chatStream(session, "hi", null, null, null, delta -> {
                     deltas.add(delta);
                     if (delta.equals("lo")) {
                         throw new IllegalStateException("SSE send failed");
@@ -118,7 +118,7 @@ class ChatServiceStreamTest {
 
     private static LlmSettingsService llmSettings(LlmClient client) {
         LlmSettingsService settings = mock(LlmSettingsService.class);
-        when(settings.client()).thenReturn(client);
+        when(settings.clientFor(any(), any(), any())).thenReturn(client);
         when(settings.isConfigured()).thenReturn(true);
         return settings;
     }

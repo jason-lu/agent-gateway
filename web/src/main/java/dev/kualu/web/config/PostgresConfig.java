@@ -106,8 +106,13 @@ public class PostgresConfig {
     }
 
     @Bean
-    public dev.kualu.web.llm.AdminLlmSettingsStore adminLlmSettingsStore(JdbcTemplate jdbc) {
-        return new dev.kualu.web.llm.PostgresAdminLlmSettingsStore(jdbc);
+    public dev.kualu.web.llm.LlmProviderStore llmProviderStore(JdbcTemplate jdbc, ObjectMapper objectMapper) {
+        return new dev.kualu.web.llm.PostgresLlmProviderStore(jdbc, objectMapper);
+    }
+
+    @Bean
+    public dev.kualu.web.llm.UserLlmPreferenceStore userLlmPreferenceStore(JdbcTemplate jdbc) {
+        return new dev.kualu.web.llm.PostgresUserLlmPreferenceStore(jdbc);
     }
 
     /**

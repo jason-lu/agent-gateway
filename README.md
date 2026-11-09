@@ -28,7 +28,9 @@ agent/
 
 Credentials are read from **environment variables first**, then from a `.env` file in the project root (CLI / `LlmConfig.fromEnvironment`), and from Spring properties for the web module.
 
-For the web module, an admin can override the LLM upstream at runtime (管理 → LLM 上游, or `GET/PUT/DELETE /api/v1/admin/llm-settings`): admin values win **per field** over the environment config above, and any field left unset falls back to it. Changes apply to the next turn without a restart; the CLI keeps using the environment only. `POST /api/v1/admin/llm-settings/models` lists the models the upstream offers (OpenAI-compatible `GET /models`) so the admin UI can offer them in a dropdown; its optional body carries the connection the form holds, with the same per-field semantics as the update.
+For the web module, admins configure any number of LLM **providers** at runtime (管理 → LLM 供应商, or `GET/POST/PUT/DELETE /api/v1/admin/llm-providers`): each one is a connection (Base URL + API key) plus the model IDs it offers, and exactly one is the **primary** — the deployment default. The primary cannot be deleted (`409`); promote another provider (`POST /api/v1/admin/llm-providers/{id}/primary`) first, which is also what releases the old one for deletion. Changes apply to the next turn without a restart; the CLI keeps using the environment only. `POST /api/v1/admin/llm-providers/models` lists the models an upstream offers (OpenAI-compatible `GET /models`) so the admin form can offer them instead of requiring manual entry.
+
+Every user picks a concrete model in the chat window (`GET /api/v1/llm/models` lists the choices, `PUT /api/v1/llm/model` remembers the pick per account). A turn uses the (provider, model) the message names and falls back to the saved choice, then to the primary provider's default model. When no provider exists yet, the environment config above seeds one named `默认` on first start, so a fresh deployment works out of the box.
 
 | Setting | Primary | Alias | Web property |
 |---|---|---|---|
@@ -254,9 +256,17 @@ New passwords need at least 8 characters; a wrong `currentPassword` is `400`. Th
 | DELETE | `/api/v1/sessions/{id}` | USER | Delete session |
 | GET | `/api/v1/sessions/{id}/messages` | USER | Message history |
 | GET | `/api/v1/sessions/{id}/images/{imageId}` | USER | Stored message image (raw bytes) |
-| POST | `/api/v1/sessions/{id}/messages` | USER | `{content, images?}` → `{reply}` |
-| POST | `/api/v1/sessions/{id}/messages/stream` | USER | `{content, images?}` → SSE stream |
+| POST | `/api/v1/sessions/{id}/messages` | USER | `{content, images?, providerId?, model?}` → `{reply}` |
+| POST | `/api/v1/sessions/{id}/messages/stream` | USER | `{content, images?, providerId?, model?}` → SSE stream |
+| GET | `/api/v1/llm/models` | USER | Model picker: `{models, defaultChoice, selected}` |
+| PUT | `/api/v1/llm/model` | USER | Remember the caller's model choice `{providerId, model}` |
 | GET | `/api/v1/admin/users` | ADMIN | List configured users |
+| GET | `/api/v1/admin/llm-providers` | ADMIN | List providers (API keys masked) |
+| POST | `/api/v1/admin/llm-providers` | ADMIN | Create provider `{name, baseUrl, apiKey, models, defaultModel}` (first one is primary) |
+| PUT | `/api/v1/admin/llm-providers/{id}` | ADMIN | Update provider fields (mask/blank `apiKey` keeps the stored key) |
+| DELETE | `/api/v1/admin/llm-providers/{id}` | ADMIN | Delete provider (`409` while it is the primary) |
+| POST | `/api/v1/admin/llm-providers/{id}/primary` | ADMIN | Make this provider the primary default |
+| POST | `/api/v1/admin/llm-providers/models` | ADMIN | Probe a draft connection's models `{id?, baseUrl?, apiKey?}` |
 
 SSE events: `delta` (`{"text"}`), then `done` (`{"reply"}`) or `error` (`{"message"}`).
 
@@ -266,7 +276,7 @@ Chat is `503` when LLM is not configured, `502` when the upstream LLM fails.
 **Image input (vision).** A message may carry `images`: up to 10 entries, each a
 `data:image/...` base64 URI or an `http(s)` image URL (≤ 25M characters each).
 Text and images travel together as OpenAI-style multimodal `content` parts, so
-`LLM_MODEL` must be a vision-capable model. `content` may be blank when images
+the chosen model must be vision-capable. `content` may be blank when images
 are present (recognition without a question); at least one of the two is
 required. History entries come back as `{role, content, images?}` — the frontend
 renders the images in the conversation.

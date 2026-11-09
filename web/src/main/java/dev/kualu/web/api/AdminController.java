@@ -1,16 +1,18 @@
 package dev.kualu.web.api;
 
 import dev.kualu.web.api.ApiDtos.AdminLlmModelsResponse;
-import dev.kualu.web.api.ApiDtos.AdminLlmSettingsResponse;
 import dev.kualu.web.api.ApiDtos.AdminUserResponse;
+import dev.kualu.web.api.ApiDtos.LlmProviderBody;
+import dev.kualu.web.api.ApiDtos.LlmProviderProbeBody;
+import dev.kualu.web.api.ApiDtos.LlmProviderResponse;
 import dev.kualu.web.config.SecurityProperties;
-import dev.kualu.web.llm.AdminLlmSettings;
-import dev.kualu.web.llm.AdminLlmSettingsStore;
+import dev.kualu.web.llm.LlmProvider;
 import dev.kualu.web.llm.LlmSettingsService;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -20,20 +22,22 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 
+/**
+ * Deployment-level LLM provider management. Exactly one provider is the primary
+ * (the default model source for users who have not chosen); it cannot be deleted
+ * until another one is promoted, so the deployment never ends up without an
+ * upstream. Secrets are masked ({@code SettingsController.MASK} round-trips as
+ * "keep the stored key").
+ */
 @RestController
 @RequestMapping("/api/v1/admin")
 public class AdminController {
 
     private final SecurityProperties securityProperties;
-    private final AdminLlmSettingsStore llmStore;
     private final LlmSettingsService llmSettings;
 
-    public AdminController(
-            SecurityProperties securityProperties,
-            AdminLlmSettingsStore llmStore,
-            LlmSettingsService llmSettings) {
+    public AdminController(SecurityProperties securityProperties, LlmSettingsService llmSettings) {
         this.securityProperties = securityProperties;
-        this.llmStore = llmStore;
         this.llmSettings = llmSettings;
     }
 
@@ -45,97 +49,99 @@ public class AdminController {
                 .toList();
     }
 
-    /**
-     * The admin LLM overrides and what they resolve to. A field that is not overridden
-     * falls back to the environment config ({@code LLM_BASE_URL} / {@code LLM_API_KEY} /
-     * {@code LLM_MODEL}); admin values win per field.
-     */
-    @GetMapping("/llm-settings")
+    @GetMapping("/llm-providers")
     @PreAuthorize("hasRole('ADMIN')")
-    public AdminLlmSettingsResponse llmSettings() {
-        return toResponse(llmSettings.status());
+    public List<LlmProviderResponse> llmProviders() {
+        return llmSettings.providers().stream().map(AdminController::toResponse).toList();
     }
 
-    /**
-     * Writes the overrides. Per field: absent (null) keeps the stored value, a blank
-     * string clears the override (falls back to the environment), anything else replaces
-     * it; the mask placeholder on {@code apiKey} keeps the stored key. Changes apply to
-     * the next turn without a restart.
-     */
-    @PutMapping("/llm-settings")
+    /** The first provider ever created becomes the primary. */
+    @PostMapping("/llm-providers")
+    @ResponseStatus(HttpStatus.CREATED)
     @PreAuthorize("hasRole('ADMIN')")
-    public AdminLlmSettingsResponse updateLlmSettings(@RequestBody AdminLlmSettingsBody body) {
-        AdminLlmSettings existing = llmStore.find().orElse(new AdminLlmSettings(null, null, null));
-        llmStore.save(new AdminLlmSettings(
-                mergeField(body.baseUrl(), existing.baseUrl()),
-                mergeSecret(body.apiKey(), existing.apiKey()),
-                mergeField(body.model(), existing.model())));
-        return toResponse(llmSettings.status());
+    public LlmProviderResponse createLlmProvider(@RequestBody LlmProviderBody body) {
+        return toResponse(llmSettings.create(
+                body.name(), body.baseUrl(), mergeSecret(body.apiKey(), null),
+                body.models(), body.defaultModel()));
     }
 
-    /** Drops every override so the environment configuration applies again. */
-    @DeleteMapping("/llm-settings")
+    /** Field edits only — use {@code /primary} to move the primary flag. */
+    @PutMapping("/llm-providers/{id}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public LlmProviderResponse updateLlmProvider(@PathVariable String id, @RequestBody LlmProviderBody body) {
+        LlmProvider existing = llmSettings.providers().stream()
+                .filter(provider -> provider.id().equals(id))
+                .findFirst()
+                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
+                        HttpStatus.NOT_FOUND, "no such provider: " + id));
+        return toResponse(llmSettings.update(
+                id, body.name(), body.baseUrl(), mergeSecret(body.apiKey(), existing.apiKey()),
+                body.models(), body.defaultModel()));
+    }
+
+    /** 409 while the target is the primary: promote another provider first. */
+    @DeleteMapping("/llm-providers/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     @PreAuthorize("hasRole('ADMIN')")
-    public void resetLlmSettings() {
-        llmStore.delete();
+    public void deleteLlmProvider(@PathVariable String id) {
+        llmSettings.delete(id);
+    }
+
+    /** Makes this provider the deployment default (the one users fall back to). */
+    @PostMapping("/llm-providers/{id}/primary")
+    @PreAuthorize("hasRole('ADMIN')")
+    public LlmProviderResponse promoteLlmProvider(@PathVariable String id) {
+        return toResponse(llmSettings.promote(id));
     }
 
     /**
-     * Lists the model IDs the upstream offers (OpenAI-compatible {@code GET /models})
-     * so the admin UI can offer them in a dropdown instead of requiring manual entry.
-     * Body fields carry the connection the form currently holds, with the same
-     * semantics as {@link #updateLlmSettings} (null keeps the stored value, a blank
-     * clears it, the mask keeps the stored key) — the list is what saving those values
-     * right now would reach. Omit the body to probe the current effective connection.
+     * Lists the model IDs the given connection offers (OpenAI-compatible
+     * {@code GET /models}) so the admin form can offer them instead of requiring
+     * manual entry. {@code id} anchors the merge to a stored provider: per field, a
+     * blank (or the mask on the key) keeps the stored value, anything else is used
+     * as given — the list is what saving those values right now would reach.
      */
-    @PostMapping("/llm-settings/models")
+    @PostMapping("/llm-providers/models")
     @PreAuthorize("hasRole('ADMIN')")
-    public AdminLlmModelsResponse listLlmModels(@RequestBody(required = false) AdminLlmModelsBody body) {
-        AdminLlmSettings existing = llmStore.find().orElse(new AdminLlmSettings(null, null, null));
-        AdminLlmSettings draft = body == null
-                ? existing
-                : new AdminLlmSettings(
-                        mergeField(body.baseUrl(), existing.baseUrl()),
-                        mergeSecret(body.apiKey(), existing.apiKey()),
-                        existing.model());
-        return new AdminLlmModelsResponse(llmSettings.listModels(draft));
-    }
-
-    /** See {@link #listLlmModels}: the draft connection; the model name is what the listing chooses. */
-    public record AdminLlmModelsBody(String baseUrl, String apiKey) {
-    }
-
-    /** See {@link #updateLlmSettings}: null keeps, blank clears, a value replaces. */
-    public record AdminLlmSettingsBody(String baseUrl, String apiKey, String model) {
-    }
-
-    private static AdminLlmSettingsResponse toResponse(LlmSettingsService.Status status) {
-        AdminLlmSettings admin = status.admin();
-        return new AdminLlmSettingsResponse(
-                admin.baseUrl(),
-                AdminLlmSettings.isBlank(admin.apiKey()) ? null : SettingsController.MASK,
-                admin.model(),
-                status.effectiveBaseUrl(),
-                status.effectiveModel(),
-                status.baseUrlSource(),
-                status.apiKeySource(),
-                status.modelSource(),
-                status.configured());
-    }
-
-    private static String mergeField(String incoming, String stored) {
-        if (incoming == null) {
-            return stored;
+    public AdminLlmModelsResponse listLlmModels(@RequestBody(required = false) LlmProviderProbeBody body) {
+        String baseUrl = body == null ? null : body.baseUrl();
+        String apiKey = body == null ? null : body.apiKey();
+        if (body != null && body.id() != null) {
+            LlmProvider stored = llmSettings.providers().stream()
+                    .filter(provider -> provider.id().equals(body.id()))
+                    .findFirst()
+                    .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
+                            HttpStatus.NOT_FOUND, "no such provider: " + body.id()));
+            if (isBlank(baseUrl)) {
+                baseUrl = stored.baseUrl();
+            }
+            if (isBlank(apiKey) || SettingsController.MASK.equals(apiKey)) {
+                apiKey = stored.apiKey();
+            }
         }
-        return incoming.isBlank() ? null : incoming.trim();
+        return new AdminLlmModelsResponse(llmSettings.listModels(baseUrl, apiKey));
     }
 
-    /** Same as {@link #mergeField}, except the mask placeholder keeps the stored value. */
+    private static LlmProviderResponse toResponse(LlmProvider provider) {
+        return new LlmProviderResponse(
+                provider.id(),
+                provider.name(),
+                provider.baseUrl(),
+                SettingsController.MASK,
+                provider.models(),
+                provider.defaultModel(),
+                provider.primary());
+    }
+
+    /** The mask (or a blank, or {@code null}) keeps the stored key; anything else replaces it. */
     private static String mergeSecret(String incoming, String stored) {
-        if (incoming == null || SettingsController.MASK.equals(incoming)) {
+        if (incoming == null || incoming.isBlank() || SettingsController.MASK.equals(incoming)) {
             return stored;
         }
-        return incoming.isBlank() ? null : incoming.trim();
+        return incoming.trim();
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 }
