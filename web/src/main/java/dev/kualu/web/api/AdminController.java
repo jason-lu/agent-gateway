@@ -1,5 +1,6 @@
 package dev.kualu.web.api;
 
+import dev.kualu.web.api.ApiDtos.AdminLlmModelsResponse;
 import dev.kualu.web.api.ApiDtos.AdminLlmSettingsResponse;
 import dev.kualu.web.api.ApiDtos.AdminUserResponse;
 import dev.kualu.web.config.SecurityProperties;
@@ -10,6 +11,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -77,6 +79,31 @@ public class AdminController {
     @PreAuthorize("hasRole('ADMIN')")
     public void resetLlmSettings() {
         llmStore.delete();
+    }
+
+    /**
+     * Lists the model IDs the upstream offers (OpenAI-compatible {@code GET /models})
+     * so the admin UI can offer them in a dropdown instead of requiring manual entry.
+     * Body fields carry the connection the form currently holds, with the same
+     * semantics as {@link #updateLlmSettings} (null keeps the stored value, a blank
+     * clears it, the mask keeps the stored key) — the list is what saving those values
+     * right now would reach. Omit the body to probe the current effective connection.
+     */
+    @PostMapping("/llm-settings/models")
+    @PreAuthorize("hasRole('ADMIN')")
+    public AdminLlmModelsResponse listLlmModels(@RequestBody(required = false) AdminLlmModelsBody body) {
+        AdminLlmSettings existing = llmStore.find().orElse(new AdminLlmSettings(null, null, null));
+        AdminLlmSettings draft = body == null
+                ? existing
+                : new AdminLlmSettings(
+                        mergeField(body.baseUrl(), existing.baseUrl()),
+                        mergeSecret(body.apiKey(), existing.apiKey()),
+                        existing.model());
+        return new AdminLlmModelsResponse(llmSettings.listModels(draft));
+    }
+
+    /** See {@link #listLlmModels}: the draft connection; the model name is what the listing chooses. */
+    public record AdminLlmModelsBody(String baseUrl, String apiKey) {
     }
 
     /** See {@link #updateLlmSettings}: null keeps, blank clears, a value replaces. */

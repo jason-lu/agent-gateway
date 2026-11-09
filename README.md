@@ -28,7 +28,7 @@ agent/
 
 Credentials are read from **environment variables first**, then from a `.env` file in the project root (CLI / `LlmConfig.fromEnvironment`), and from Spring properties for the web module.
 
-For the web module, an admin can override the LLM upstream at runtime (管理 → LLM 上游, or `GET/PUT/DELETE /api/v1/admin/llm-settings`): admin values win **per field** over the environment config above, and any field left unset falls back to it. Changes apply to the next turn without a restart; the CLI keeps using the environment only.
+For the web module, an admin can override the LLM upstream at runtime (管理 → LLM 上游, or `GET/PUT/DELETE /api/v1/admin/llm-settings`): admin values win **per field** over the environment config above, and any field left unset falls back to it. Changes apply to the next turn without a restart; the CLI keeps using the environment only. `POST /api/v1/admin/llm-settings/models` lists the models the upstream offers (OpenAI-compatible `GET /models`) so the admin UI can offer them in a dropdown; its optional body carries the connection the form holds, with the same per-field semantics as the update.
 
 | Setting | Primary | Alias | Web property |
 |---|---|---|---|

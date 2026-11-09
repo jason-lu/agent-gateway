@@ -48,6 +48,14 @@ public final class ApiDtos {
     }
 
     /**
+     * Model IDs detected on the configured LLM upstream (OpenAI-compatible
+     * {@code GET /models}); feeds the admin dropdown so the model name needs no
+     * manual entry.
+     */
+    public record AdminLlmModelsResponse(List<String> models) {
+    }
+
+    /**
      * One user-configured MCP server. {@code env}/{@code headers} values are masked
      * ({@code ••••••••}) — real credentials never leave the server. {@code status} is
      * {@code connected}, {@code disconnected}, {@code disabled} or {@code unknown}.

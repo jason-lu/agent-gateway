@@ -1,13 +1,18 @@
 package dev.kualu.web.llm;
 
 import dev.kualu.http.HttpClient;
+import dev.kualu.http.HttpClientException;
+import dev.kualu.llm.LlmException;
 import dev.kualu.llm.client.ImageSource;
 import dev.kualu.llm.client.LlmClient;
 import dev.kualu.llm.client.LlmConfig;
+import dev.kualu.web.chat.LlmNotConfiguredException;
+import dev.kualu.web.chat.UpstreamLlmException;
 import dev.kualu.web.config.LlmProperties;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.util.List;
 
 /**
  * Resolves the effective LLM upstream and hands out the matching client.
@@ -72,6 +77,29 @@ public class LlmSettingsService {
                 apiKey.source(),
                 model.source(),
                 baseUrl.value() != null && apiKey.value() != null && model.value() != null);
+    }
+
+    /**
+     * Model IDs the upstream offers (OpenAI-compatible {@code GET /models}), resolved
+     * like the settings themselves: the given admin values win per field over the
+     * environment, so passing what a form holds lists the models that saving those
+     * values right now would reach. Only base URL and API key matter — the model name
+     * is exactly what this listing helps choose.
+     *
+     * @throws LlmNotConfiguredException when neither source carries the connection
+     * @throws UpstreamLlmException when the upstream cannot list its models
+     */
+    public List<String> listModels(AdminLlmSettings admin) {
+        Field baseUrl = pick(admin.baseUrl(), env.baseUrl());
+        Field apiKey = pick(admin.apiKey(), env.apiKey());
+        if (baseUrl.value() == null || apiKey.value() == null) {
+            throw new LlmNotConfiguredException("LLM is not configured: set the base URL and API key first");
+        }
+        try {
+            return LlmClient.listModels(new HttpClient(), baseUrl.value(), apiKey.value());
+        } catch (LlmException | HttpClientException ex) {
+            throw new UpstreamLlmException(ex.getMessage(), ex);
+        }
     }
 
     /**

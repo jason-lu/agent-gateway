@@ -2,6 +2,8 @@ package dev.kualu.web.llm;
 
 import dev.kualu.llm.client.ImageSource;
 import dev.kualu.llm.client.LlmConfig;
+import dev.kualu.web.chat.LlmNotConfiguredException;
+import dev.kualu.web.chat.UpstreamLlmException;
 import dev.kualu.web.config.LlmProperties;
 import org.junit.jupiter.api.Test;
 
@@ -11,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -99,6 +102,27 @@ class LlmSettingsServiceTest {
         assertEquals("admin-key", status.admin().apiKey());
         assertEquals("https://admin.example.com/v1", status.effectiveBaseUrl());
         assertEquals("env-model", status.effectiveModel());
+    }
+
+    @Test
+    void listModelsNeedsAConnectionButNoModelName() {
+        LlmSettingsService none = service(env(null, null, null));
+        assertThrows(LlmNotConfiguredException.class,
+                () -> none.listModels(new AdminLlmSettings(null, null, null)),
+                "a probe without any base URL or API key must not hit the network");
+
+        LlmSettingsService missingKey = service(env("https://env.example.com/v1", null, null));
+        assertThrows(LlmNotConfiguredException.class,
+                () -> missingKey.listModels(new AdminLlmSettings(null, null, null)),
+                "a missing API key is still an incomplete connection");
+
+        // A complete connection is enough even with no model name — that is what the
+        // listing is for. Port 1 refuses instantly, so the probe fails as an upstream
+        // error rather than a configuration one.
+        LlmSettingsService connected = service(env(null, null, null));
+        assertThrows(UpstreamLlmException.class,
+                () -> connected.listModels(new AdminLlmSettings("http://127.0.0.1:1/v1", "key", null)),
+                "without a model name the probe must still reach the upstream");
     }
 
     private LlmSettingsService service(LlmProperties env) {

@@ -43,6 +43,10 @@ class LlmClientTest {
             {"choices":[{"message":{"role":"assistant","content":"Hello from model"}}]}
             """;
     private String streamBody;
+    private int modelsStatus = 200;
+    private String modelsBody = """
+            {"object":"list","data":[{"id":"gpt-4o"},{"id":"gpt-4o-mini"}]}
+            """;
     private volatile boolean stallAfterStream;
     private volatile boolean releaseStalledHandler;
 
@@ -51,6 +55,8 @@ class LlmClientTest {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/v1/chat/completions", this::handleChat);
         server.createContext("/chat/completions", this::handleChat);
+        server.createContext("/v1/models", this::handleModels);
+        server.createContext("/models", this::handleModels);
         server.start();
 
         String baseUrl = "http://127.0.0.1:" + server.getAddress().getPort() + "/v1";
@@ -106,6 +112,20 @@ class LlmClientTest {
     void tearDown() {
         releaseStalledHandler = true;
         server.stop(0);
+    }
+
+    private void handleModels(HttpExchange exchange) throws IOException {
+        capturedPath.set(exchange.getRequestURI().getPath());
+        capturedAuth.set(exchange.getRequestHeaders().getFirst("Authorization"));
+        capturedAccept.set(exchange.getRequestHeaders().getFirst("Accept"));
+        exchange.getRequestBody().readAllBytes();
+
+        byte[] bytes = modelsBody.getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().add("Content-Type", "application/json");
+        exchange.sendResponseHeaders(modelsStatus, bytes.length);
+        try (OutputStream os = exchange.getResponseBody()) {
+            os.write(bytes);
+        }
     }
 
     @Test
@@ -692,5 +712,92 @@ class LlmClientTest {
                 () -> client.completeStream(List.of(ChatMessage.user("hi")), execTools(), d -> {}));
 
         assertTrue(ex.getMessage().contains("id or name"), ex.getMessage());
+    }
+
+    @Test
+    void listModels_sendsBearerAuthAndDecodesIdsInOrder() {
+        List<String> ids = LlmClient.listModels(new dev.kualu.http.HttpClient(), config.baseUrl(), config.apiKey());
+
+        assertEquals(List.of("gpt-4o", "gpt-4o-mini"), ids);
+        assertEquals("/v1/models", capturedPath.get());
+        assertEquals("Bearer test-api-key", capturedAuth.get());
+        assertEquals("application/json", capturedAccept.get());
+    }
+
+    @Test
+    void listModels_normalizesTheApiRoot() {
+        String origin = "http://127.0.0.1:" + server.getAddress().getPort();
+
+        LlmClient.listModels(new dev.kualu.http.HttpClient(), origin + "/v1/chat/completions/", "k");
+        assertEquals("/v1/models", capturedPath.get());
+
+        LlmClient.listModels(new dev.kualu.http.HttpClient(), origin, "k");
+        assertEquals("/models", capturedPath.get());
+    }
+
+    @Test
+    void listModels_skipsMalformedEntries() {
+        modelsBody = """
+                {"data":[{"id":"a"},{"id":42},{"object":"model"},{"id":"  "},{"id":"b"}]}
+                """;
+
+        assertEquals(List.of("a", "b"),
+                LlmClient.listModels(new dev.kualu.http.HttpClient(), config.baseUrl(), "k"));
+    }
+
+    @Test
+    void listModels_httpError_throwsWithStatusAndMessage() {
+        modelsStatus = 401;
+        modelsBody = """
+                {"error":{"message":"Invalid API key","type":"invalid_request_error"}}
+                """;
+
+        LlmException ex = assertThrows(LlmException.class,
+                () -> LlmClient.listModels(new dev.kualu.http.HttpClient(), config.baseUrl(), "k"));
+
+        assertEquals(401, ex.statusCode());
+        assertTrue(ex.getMessage().contains("Invalid API key"));
+    }
+
+    @Test
+    void listModels_errorFieldInOkBody_throws() {
+        modelsBody = """
+                {"error":{"message":"listing disabled"}}
+                """;
+
+        LlmException ex = assertThrows(LlmException.class,
+                () -> LlmClient.listModels(new dev.kualu.http.HttpClient(), config.baseUrl(), "k"));
+
+        assertTrue(ex.getMessage().contains("listing disabled"));
+    }
+
+    @Test
+    void listModels_withoutDataArray_throws() {
+        modelsBody = """
+                {"object":"list"}
+                """;
+
+        LlmException ex = assertThrows(LlmException.class,
+                () -> LlmClient.listModels(new dev.kualu.http.HttpClient(), config.baseUrl(), "k"));
+
+        assertTrue(ex.getMessage().contains("data array"));
+    }
+
+    @Test
+    void listModels_invalidJson_throws() {
+        modelsBody = "{\"data\": [";
+
+        LlmException ex = assertThrows(LlmException.class,
+                () -> LlmClient.listModels(new dev.kualu.http.HttpClient(), config.baseUrl(), "k"));
+
+        assertTrue(ex.getMessage().contains("JSON"), ex.getMessage());
+    }
+
+    @Test
+    void listModels_blankConnection_throws() {
+        assertThrows(LlmException.class,
+                () -> LlmClient.listModels(new dev.kualu.http.HttpClient(), " ", "k"));
+        assertThrows(LlmException.class,
+                () -> LlmClient.listModels(new dev.kualu.http.HttpClient(), config.baseUrl(), " "));
     }
 }

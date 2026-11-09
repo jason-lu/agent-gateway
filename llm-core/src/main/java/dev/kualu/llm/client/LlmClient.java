@@ -1,8 +1,10 @@
 package dev.kualu.llm.client;
 
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.google.gson.JsonSyntaxException;
 import dev.kualu.http.HttpClient;
 import dev.kualu.llm.AssistantTurn;
 import dev.kualu.llm.ChatMessage;
@@ -12,6 +14,7 @@ import dev.kualu.llm.ToolSpec;
 
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -60,6 +63,70 @@ public class LlmClient {
     /** Loads credentials from the environment / {@code .env} and uses them. */
     public static LlmClient fromEnvironment() {
         return new LlmClient(LlmConfig.fromEnvironment());
+    }
+
+    /**
+     * Model IDs offered by an OpenAI-compatible upstream ({@code GET /models}).
+     * Only the connection is needed — the model name is exactly what this listing
+     * helps choose. Order follows the upstream response.
+     */
+    public static List<String> listModels(HttpClient http, String baseUrl, String apiKey) {
+        Objects.requireNonNull(http, "http");
+        requireText(baseUrl, "baseUrl");
+        requireText(apiKey, "apiKey");
+
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("Authorization", "Bearer " + apiKey.trim());
+        headers.put("Accept", "application/json");
+
+        HttpResponse<String> response = http.get(apiRoot(baseUrl) + "/models", headers);
+        int status = response.statusCode();
+        String raw = response.body() == null ? "" : response.body();
+        if (status < 200 || status >= 300) {
+            throw new LlmException(LlmErrorMessages.forHttp(status, raw), status, raw);
+        }
+        return parseModelIds(raw, status);
+    }
+
+    /** The {@code data[].id} strings of a {@code GET /models} body. */
+    private static List<String> parseModelIds(String raw, int status) {
+        if (raw.isBlank()) {
+            throw new LlmException("LLM model list response was empty", status, raw);
+        }
+        JsonElement parsed;
+        try {
+            parsed = JsonParser.parseString(raw);
+        } catch (JsonSyntaxException e) {
+            throw new LlmException("LLM model list response was not valid JSON", status, raw);
+        }
+        if (parsed == null || !parsed.isJsonObject()) {
+            throw new LlmException("LLM model list response was not a JSON object", status, raw);
+        }
+        JsonObject root = parsed.getAsJsonObject();
+
+        JsonElement error = root.get("error");
+        if (error != null && !error.isJsonNull()) {
+            throw new LlmException(LlmErrorMessages.fromApiError(error), status, raw);
+        }
+
+        JsonElement data = root.get("data");
+        if (data == null || !data.isJsonArray()) {
+            throw new LlmException("LLM model list response had no data array", status, raw);
+        }
+        List<String> ids = new ArrayList<>();
+        for (JsonElement item : data.getAsJsonArray()) {
+            if (item == null || !item.isJsonObject()) {
+                continue;
+            }
+            JsonElement id = item.getAsJsonObject().get("id");
+            if (id != null && id.isJsonPrimitive() && id.getAsJsonPrimitive().isString()) {
+                String value = id.getAsString();
+                if (!value.isBlank()) {
+                    ids.add(value);
+                }
+            }
+        }
+        return List.copyOf(ids);
     }
 
     public LlmConfig config() {
@@ -293,13 +360,31 @@ public class LlmClient {
     }
 
     private String completionsUrl() {
-        String base = config.baseUrl();
+        return apiRoot(config.baseUrl()) + "/chat/completions";
+    }
+
+    /**
+     * The endpoint prefix shared by {@code /chat/completions} and {@code /models}:
+     * trailing slashes and a trailing {@code /chat/completions} are stripped so a
+     * config may name either the API root or the full completions URL.
+     */
+    private static String apiRoot(String baseUrl) {
+        String base = requireText(baseUrl, "baseUrl");
         while (base.endsWith("/")) {
             base = base.substring(0, base.length() - 1);
         }
         if (base.endsWith("/chat/completions")) {
-            return base;
+            base = base.substring(0, base.length() - "/chat/completions".length());
         }
-        return base + "/chat/completions";
+        return base;
+    }
+
+    private static String requireText(String value, String name) {
+        Objects.requireNonNull(value, name);
+        String trimmed = value.trim();
+        if (trimmed.isEmpty()) {
+            throw new LlmException("LLM config " + name + " must not be blank");
+        }
+        return trimmed;
     }
 }
