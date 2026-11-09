@@ -4,12 +4,12 @@ import tools.jackson.databind.ObjectMapper;
 import dev.kualu.llm.ChatMessage;
 import dev.kualu.llm.ToolCall;
 import dev.kualu.llm.memory.MemoryCompressor;
+import dev.kualu.web.SharedPostgres;
 import dev.kualu.web.auth.JdbcUserDetailsService;
 import dev.kualu.web.auth.JdbcUserSeeder;
 import dev.kualu.web.config.SecurityProperties;
 import io.zonky.test.db.postgres.embedded.EmbeddedPostgres;
 import org.flywaydb.core.Flyway;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -17,7 +17,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.factory.PasswordEncoderFactories;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -31,8 +30,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Runs the real migration and the persistence layer against a real PostgreSQL
- * (zonky embedded — no Docker needed). Each test starts from a freshly migrated
- * schema, seeded with the two accounts the fixtures use.
+ * (zonky embedded — no Docker needed). The schema is migrated once per class;
+ * each test starts from truncated tables seeded with the two accounts the
+ * fixtures use (the legacy-upgrade test rebuilds its own schema).
  */
 class PostgresPersistenceIntegrationTest {
 
@@ -44,24 +44,23 @@ class PostgresPersistenceIntegrationTest {
     private static PasswordEncoder encoder;
 
     @BeforeAll
-    static void startDatabase() throws IOException {
-        postgres = EmbeddedPostgres.start();
+    static void startDatabase() {
+        postgres = SharedPostgres.get();
         jdbc = new JdbcTemplate(postgres.getPostgresDatabase());
         store = new PostgresSessionStore(jdbc, new ChatMessageCodec(new ObjectMapper()));
         encoder = PasswordEncoderFactories.createDelegatingPasswordEncoder();
-    }
-
-    @AfterAll
-    static void stopDatabase() throws IOException {
-        if (postgres != null) {
-            postgres.close();
-        }
-    }
-
-    @BeforeEach
-    void migrateFresh() {
-        jdbc.execute("drop schema if exists agent cascade");
         migrateToLatest();
+        seedUsers();
+    }
+
+    /** Data-only reset: cascades to sessions, messages, images and the other user-scoped tables. */
+    @BeforeEach
+    void resetData() {
+        jdbc.execute("truncate agent.users cascade");
+        seedUsers();
+    }
+
+    private static void seedUsers() {
         new JdbcUserSeeder(jdbc, encoder).seed(List.of(
                 new SecurityProperties.User("ada", "ada-pw", List.of("USER")),
                 new SecurityProperties.User("bob", "bob-pw", List.of("USER"))));

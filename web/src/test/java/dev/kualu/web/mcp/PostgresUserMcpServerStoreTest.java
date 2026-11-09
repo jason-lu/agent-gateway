@@ -1,15 +1,14 @@
 package dev.kualu.web.mcp;
 
+import dev.kualu.web.SharedPostgres;
 import tools.jackson.databind.ObjectMapper;
 import io.zonky.test.db.postgres.embedded.EmbeddedPostgres;
 import org.flywaydb.core.Flyway;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 
-import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 
@@ -25,22 +24,10 @@ class PostgresUserMcpServerStoreTest {
     private static PostgresUserMcpServerStore store;
 
     @BeforeAll
-    static void startDatabase() throws IOException {
-        postgres = EmbeddedPostgres.start();
+    static void startDatabase() {
+        postgres = SharedPostgres.get();
         jdbc = new JdbcTemplate(postgres.getPostgresDatabase());
         store = new PostgresUserMcpServerStore(jdbc, new ObjectMapper());
-    }
-
-    @AfterAll
-    static void stopDatabase() throws IOException {
-        if (postgres != null) {
-            postgres.close();
-        }
-    }
-
-    @BeforeEach
-    void migrateFresh() {
-        jdbc.execute("drop schema if exists agent cascade");
         Flyway.configure()
                 .dataSource(postgres.getPostgresDatabase())
                 .schemas("agent")
@@ -48,7 +35,15 @@ class PostgresUserMcpServerStoreTest {
                 .locations("classpath:db/migration")
                 .load()
                 .migrate();
-        jdbc.update("insert into agent.users (username, password_hash) values ('ada', 'x'), ('bob', 'x')");
+        // Idempotent: the shared database may already carry these accounts.
+        jdbc.update("insert into agent.users (username, password_hash) values ('ada', 'x'), ('bob', 'x')"
+                + " on conflict (username) do nothing");
+    }
+
+    /** Data-only reset — the schema is migrated once per class. */
+    @BeforeEach
+    void resetData() {
+        jdbc.execute("truncate agent.user_mcp_servers");
     }
 
     @Test
