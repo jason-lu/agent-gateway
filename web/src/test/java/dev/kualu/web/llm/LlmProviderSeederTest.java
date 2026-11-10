@@ -16,12 +16,20 @@ class LlmProviderSeederTest {
         run(env("https://env.example.com/v1", "env-key", "env-model"));
 
         LlmProvider seeded = store.findAll().get(0);
-        assertEquals(LlmProviderSeeder.DEFAULT_NAME, seeded.name());
+        assertEquals("Env", seeded.name());
         assertEquals("https://env.example.com/v1", seeded.baseUrl());
         assertEquals("env-key", seeded.apiKey());
         assertEquals(java.util.List.of("env-model"), seeded.models());
         assertEquals("env-model", seeded.defaultModel());
         assertTrue(seeded.primary());
+    }
+
+    @Test
+    void namesTheSeededProviderAfterTheModelFamily() {
+        assertEquals("Mimo", LlmProviderSeeder.defaultName("mimo-v2.6-flash"));
+        assertEquals("Gpt", LlmProviderSeeder.defaultName("gpt-4o-mini"));
+        assertEquals("Claude", LlmProviderSeeder.defaultName("claude-3-5-sonnet"));
+        assertEquals("7b-instruct", LlmProviderSeeder.defaultName("7b-instruct"));
     }
 
     @Test

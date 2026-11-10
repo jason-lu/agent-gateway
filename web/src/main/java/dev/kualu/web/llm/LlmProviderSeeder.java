@@ -20,9 +20,6 @@ public class LlmProviderSeeder implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(LlmProviderSeeder.class);
 
-    /** Provider name given to the environment-seeded entry. */
-    public static final String DEFAULT_NAME = "默认";
-
     private final LlmProviderStore store;
     private final LlmProperties env;
 
@@ -42,15 +39,33 @@ public class LlmProviderSeeder implements ApplicationRunner {
             return;
         }
         String model = env.model().trim();
+        String name = defaultName(model);
         store.save(new LlmProvider(
                 UUID.randomUUID().toString(),
-                DEFAULT_NAME,
+                name,
                 env.baseUrl().trim(),
                 env.apiKey().trim(),
                 List.of(model),
                 model,
                 true));
-        log.info("llm providers: seeded the primary provider '{}' from the environment config", DEFAULT_NAME);
+        log.info("llm providers: seeded the primary provider '{}' from the environment config", name);
+    }
+
+    /**
+     * Name for the environment-seeded provider: the model's family prefix with its
+     * first letter capitalized ({@code mimo-v2.6-flash} → {@code Mimo}), so the chat
+     * picker's {@code name / model} label reads like a vendor rather than a UI
+     * placeholder. The admin console renames the record to the exact brand.
+     */
+    static String defaultName(String model) {
+        int end = 0;
+        while (end < model.length() && Character.isLetter(model.charAt(end))) {
+            end++;
+        }
+        if (end == 0) {
+            return model;
+        }
+        return Character.toUpperCase(model.charAt(0)) + model.substring(1, end);
     }
 
     private static boolean isBlank(String value) {
