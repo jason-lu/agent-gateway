@@ -180,6 +180,43 @@ class LlmSettingsServiceTest {
     }
 
     @Test
+    void clientForModelUsesTheNamedProvider() {
+        LlmSettingsService service = service();
+        LlmProvider a = service.create("openai", "https://a.example.com/v1", "k1", List.of("m1"), "m1");
+        service.create("deepseek", "https://b.example.com/v1", "k2", List.of("d1"), "d1");
+
+        LlmClient client = service.clientForModel(a.id(), "m1");
+        assertNotNull(client);
+        assertEquals("m1", client.config().model());
+        assertEquals("https://a.example.com/v1", client.config().baseUrl());
+
+        assertNull(service.clientForModel(a.id(), "d1"), "a model not offered by that provider is not on offer");
+        assertNull(service.clientForModel(a.id(), "removed-model"));
+    }
+
+    @Test
+    void clientForModelWithoutProviderPrefersThePrimary() {
+        LlmSettingsService service = service();
+        service.create("openai", "https://a.example.com/v1", "k1", List.of("m1", "shared"), "m1");
+        service.create("deepseek", "https://b.example.com/v1", "k2", List.of("d1", "shared"), "d1");
+
+        LlmClient client = service.clientForModel(null, "shared");
+        assertNotNull(client);
+        assertEquals("https://a.example.com/v1", client.config().baseUrl(), "the primary wins a name clash");
+    }
+
+    @Test
+    void clientForModelIsNullWhenUnsetOrUnknown() {
+        LlmSettingsService service = service();
+        service.create("openai", "https://a.example.com/v1", "k1", List.of("m1"), "m1");
+
+        assertNull(service.clientForModel(null, null));
+        assertNull(service.clientForModel(null, " "));
+        assertNull(service.clientForModel("prov-x", null));
+        assertNull(service.clientForModel(null, "nope"));
+    }
+
+    @Test
     void unconfiguredWithoutProviders() {
         LlmSettingsService service = service();
         assertFalse(service.isConfigured());

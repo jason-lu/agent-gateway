@@ -35,6 +35,8 @@ agent:
     keep-messages: ${AGENT_MEMORY_KEEP_MESSAGES:8}
     max-summary-chars: ${AGENT_MEMORY_MAX_SUMMARY_CHARS:4000}
     instruction: ${AGENT_MEMORY_INSTRUCTION:}
+    summary-provider: ${AGENT_MEMORY_SUMMARY_PROVIDER:}
+    summary-model: ${AGENT_MEMORY_SUMMARY_MODEL:}
   tools:
     exec:
       # Allows the model to run system commands through the exec tool.

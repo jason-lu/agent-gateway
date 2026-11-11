@@ -14,7 +14,9 @@ public record MemoryProperties(
         int maxMessages,
         int keepMessages,
         int maxSummaryChars,
-        String instruction
+        String instruction,
+        String summaryProvider,
+        String summaryModel
 ) {
 
     public MemoryProperties {

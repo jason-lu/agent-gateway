@@ -3,6 +3,7 @@ package dev.kualu.web.config;
 import tools.jackson.databind.ObjectMapper;
 import dev.kualu.llm.tools.ExecTool;
 import dev.kualu.llm.client.ImageSource;
+import dev.kualu.llm.client.LlmClient;
 import dev.kualu.llm.memory.MemoryCompressor;
 import dev.kualu.mcp.McpConnectionManager;
 import dev.kualu.mcp.McpServerConfig;
@@ -163,9 +164,10 @@ public class AppConfig {
     }
 
     /**
-     * The client itself comes from {@link dev.kualu.web.llm.LlmSettingsService}
-     * (the primary provider's default model); it is supplied per call so runtime
-     * config changes are picked up without a restart.
+     * The client is resolved per call so runtime provider changes are picked up
+     * without a restart. When {@code agent.memory.summary-model} is set and still
+     * on offer, summarisation runs on that model instead of the chat default —
+     * a fast/cheap model keeps the 40-second summariser off the chat model.
      */
     @Bean
     public MemoryCompressor memoryCompressor(
@@ -174,10 +176,16 @@ public class AppConfig {
             log.info("memory-compress configured: enabled=false");
             return null;
         }
-        log.info("memory-compress configured: enabled=true, max-messages={}, keep-messages={}, max-summary-chars={}",
-                properties.maxMessages(), properties.keepMessages(), properties.maxSummaryChars());
+        log.info("memory-compress configured: enabled=true, max-messages={}, keep-messages={}, max-summary-chars={},"
+                        + " summary-provider={}, summary-model={}",
+                properties.maxMessages(), properties.keepMessages(), properties.maxSummaryChars(),
+                properties.summaryProvider(), properties.summaryModel());
         return new MemoryCompressor(
-                llmSettings::defaultClient, properties.maxMessages(), properties.keepMessages(), properties.instruction(),
+                () -> {
+                    LlmClient summary = llmSettings.clientForModel(properties.summaryProvider(), properties.summaryModel());
+                    return summary != null ? summary : llmSettings.defaultClient();
+                },
+                properties.maxMessages(), properties.keepMessages(), properties.instruction(),
                 properties.maxSummaryChars());
     }
 

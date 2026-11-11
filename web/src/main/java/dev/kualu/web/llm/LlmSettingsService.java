@@ -169,6 +169,31 @@ public class LlmSettingsService {
         return primary == null ? null : client(primary, primary.defaultModel());
     }
 
+    /**
+     * The client for an explicitly configured model (e.g. the memory summariser):
+     * the named provider's model when both are set and still on offer, else any
+     * provider offering the model (primary first), else {@code null}. Unlike
+     * {@link #clientFor} this never falls back to a user's saved preference.
+     */
+    public LlmClient clientForModel(String providerId, String model) {
+        if (model == null || model.isBlank()) {
+            return null;
+        }
+        if (providerId != null && !providerId.isBlank()) {
+            Resolved resolved = lookup(providerId, model);
+            return resolved == null ? null : client(resolved.provider(), resolved.model());
+        }
+        List<LlmProvider> providers = store.findAll().stream()
+                .sorted((a, b) -> Boolean.compare(b.primary(), a.primary()))
+                .toList();
+        for (LlmProvider provider : providers) {
+            if (provider.models().contains(model)) {
+                return client(provider, model);
+            }
+        }
+        return null;
+    }
+
     public boolean isConfigured() {
         return primary() != null;
     }

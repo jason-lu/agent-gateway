@@ -8,23 +8,23 @@ class MemoryPropertiesTest {
 
     @Test
     void validThresholdsAreAccepted() {
-        new MemoryProperties(true, 20, 8, 4000, null);
-        new MemoryProperties(true, 5, 2, 100, null);
+        new MemoryProperties(true, 20, 8, 4000, null, null, null);
+        new MemoryProperties(true, 5, 2, 100, null, "prov-1", "summarizer-mini");
     }
 
     @Test
     void invalidThresholdsFailFastWhenEnabled() {
-        assertThrows(IllegalArgumentException.class, () -> new MemoryProperties(true, 20, 1, 4000, null));
-        assertThrows(IllegalArgumentException.class, () -> new MemoryProperties(true, 20, 0, 4000, null));
-        assertThrows(IllegalArgumentException.class, () -> new MemoryProperties(true, 4, 2, 4000, null));
-        assertThrows(IllegalArgumentException.class, () -> new MemoryProperties(true, -1, 2, 4000, null));
-        assertThrows(IllegalArgumentException.class, () -> new MemoryProperties(true, 20, 8, 0, null));
-        assertThrows(IllegalArgumentException.class, () -> new MemoryProperties(true, 20, 8, -5, null));
+        assertThrows(IllegalArgumentException.class, () -> new MemoryProperties(true, 20, 1, 4000, null, null, null));
+        assertThrows(IllegalArgumentException.class, () -> new MemoryProperties(true, 20, 0, 4000, null, null, null));
+        assertThrows(IllegalArgumentException.class, () -> new MemoryProperties(true, 4, 2, 4000, null, null, null));
+        assertThrows(IllegalArgumentException.class, () -> new MemoryProperties(true, -1, 2, 4000, null, null, null));
+        assertThrows(IllegalArgumentException.class, () -> new MemoryProperties(true, 20, 8, 0, null, null, null));
+        assertThrows(IllegalArgumentException.class, () -> new MemoryProperties(true, 20, 8, -5, null, null, null));
     }
 
     @Test
     void disabledSkipsValidation() {
         // Matches CLI: a disabled feature must not block startup on unused values.
-        new MemoryProperties(false, -1, 0, -1, null);
+        new MemoryProperties(false, -1, 0, -1, null, null, null);
     }
 }
