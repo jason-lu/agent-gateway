@@ -17,6 +17,7 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-validation")
     implementation("org.springframework.boot:spring-boot-starter-jdbc")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
+    implementation("io.micrometer:micrometer-registry-prometheus")
     implementation("org.flywaydb:flyway-core:13.12.0")
     implementation("org.flywaydb:flyway-database-postgresql:13.12.0")
     implementation("org.springframework.boot:spring-boot-flyway")

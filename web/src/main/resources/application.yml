@@ -67,7 +67,14 @@ management:
   endpoints:
     web:
       exposure:
-        include: health, metrics
+        include: health, metrics, prometheus
+  metrics:
+    tags:
+      application: agent-web
+    distribution:
+      # Quantile gauges for the turn-timing timers/summaries (Grafana-friendly).
+      percentiles:
+        agent.turn: "0.5, 0.95, 0.99"
 
 logging:
   level:
