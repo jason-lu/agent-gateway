@@ -52,3 +52,7 @@ web/src/main/resources/static/
 
 ### PowerShell scripts (local workstation tooling) ###
 *.ps1
+
+### Monitoring scrape auth (kept local on purpose) ###
+/ops/prometheus.yml
+/web/src/test/java/dev/kualu/web/MetricsScrapeIntegrationTest.java
