@@ -24,6 +24,11 @@ llm:
   idle-timeout-seconds: ${LLM_IDLE_TIMEOUT:90}
 
 agent:
+  metrics:
+    # Shared secret for the Prometheus scrape (X-Scrape-Token header or
+    # Authorization: Bearer). Unset keeps /actuator/prometheus behind the ADMIN
+    # login like every other actuator endpoint.
+    scrape-token: ${AGENT_METRICS_TOKEN:}
   store: ${AGENT_STORE:postgres}
   db:
     url: ${AGENT_DB_URL:}

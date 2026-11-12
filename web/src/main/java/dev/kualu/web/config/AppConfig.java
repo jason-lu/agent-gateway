@@ -16,7 +16,9 @@ import dev.kualu.web.session.ImageRef;
 import dev.kualu.web.session.SessionStore;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -25,6 +27,7 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -32,6 +35,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authorization.AuthorizationDecision;
+import org.springframework.security.authorization.AuthorizationManager;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -43,6 +48,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.provisioning.InMemoryUserDetailsManager;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.access.AccessDeniedHandler;
+import org.springframework.security.web.access.intercept.RequestAuthorizationContext;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
 @Configuration
@@ -156,7 +162,8 @@ public class AppConfig {
     public SecurityFilterChain securityFilterChain(
             HttpSecurity http,
             JwtAuthenticationFilter jwtFilter,
-            ObjectMapper objectMapper) throws Exception {
+            ObjectMapper objectMapper,
+            @Value("${agent.metrics.scrape-token:}") String metricsScrapeToken) throws Exception {
         http
                 .csrf(csrf -> csrf.disable())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -174,11 +181,38 @@ public class AppConfig {
                                 "/actuator/health")
                         .permitAll()
                         .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
+                        .requestMatchers("/actuator/prometheus").access(metricsScrape(metricsScrapeToken))
                         .requestMatchers("/actuator/**").hasRole("ADMIN")
                         .requestMatchers("/api/v1/**").hasRole("USER")
                         .anyRequest().permitAll())
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
+    }
+
+    /**
+     * Prometheus scraping of {@code /actuator/prometheus}: granted when the request
+     * carries the configured token — as {@code X-Scrape-Token} or {@code Authorization:
+     * Bearer} (distro Prometheus before 2.50 can only send the latter) — or when the
+     * caller is an ADMIN, denied otherwise. The comparison is constant-time and an
+     * unset token lets only admins in. A scrape token is not a JWT, so the JWT filter
+     * simply skips such a Bearer header.
+     */
+    private static AuthorizationManager<RequestAuthorizationContext> metricsScrape(String scrapeToken) {
+        byte[] expected = scrapeToken == null ? new byte[0] : scrapeToken.getBytes(StandardCharsets.UTF_8);
+        return (authentication, context) -> {
+            String presented = context.getRequest().getHeader("X-Scrape-Token");
+            if (presented == null) {
+                String authorization = context.getRequest().getHeader("Authorization");
+                if (authorization != null && authorization.startsWith("Bearer ")) {
+                    presented = authorization.substring(7).trim();
+                }
+            }
+            byte[] actual = presented == null ? new byte[0] : presented.getBytes(StandardCharsets.UTF_8);
+            boolean byToken = expected.length > 0 && actual.length > 0 && MessageDigest.isEqual(expected, actual);
+            boolean byAdmin = authentication.get().getAuthorities().stream()
+                    .anyMatch(authority -> "ROLE_ADMIN".equals(authority.getAuthority()));
+            return new AuthorizationDecision(byToken || byAdmin);
+        };
     }
 
     @Bean
