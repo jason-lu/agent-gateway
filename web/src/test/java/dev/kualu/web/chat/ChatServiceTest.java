@@ -1,6 +1,7 @@
 package dev.kualu.web.chat;
 
 import dev.kualu.llm.ChatMessage;
+import dev.kualu.llm.ToolCall;
 import dev.kualu.llm.client.LlmClient;
 import dev.kualu.llm.client.LlmConfig;
 import dev.kualu.llm.LlmException;
@@ -76,6 +77,52 @@ class ChatServiceTest {
         assertEquals(2, history.size());
         assertEquals("user", history.get(0).role());
         assertEquals("assistant", history.get(1).role());
+    }
+
+    @Test
+    void rawHistoryKeepsEveryTurnIncludingToolTrafficAndSummaries() {
+        InMemorySessionStore store = new InMemorySessionStore();
+        Session session = store.create("ada", null);
+        session.memory().replaceAll(List.of(
+                ChatMessage.system("you are terse"),
+                ChatMessage.user("hello"),
+                ChatMessage.assistantToolCalls("", List.of(new ToolCall("call-1", "exec", "{\"command\":\"ls\"}"))),
+                ChatMessage.tool("file1", "call-1"),
+                ChatMessage.system(MemoryCompressor.SUMMARY_PREFIX + " earlier talk"),
+                ChatMessage.user("and then")));
+
+        ChatService service = new ChatService(
+                store, emptyLlmSettings(), emptyCompressorProvider(), List.of(),
+                emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
+        var raw = service.rawHistory(session);
+
+        assertEquals(6, raw.size());
+        assertEquals("you are terse", raw.get(0).content());
+        assertEquals(null, raw.get(0).toolCalls());
+        assertEquals("", raw.get(2).content());
+        assertEquals(1, raw.get(2).toolCalls().size());
+        assertEquals("call-1", raw.get(2).toolCalls().get(0).id());
+        assertEquals("exec", raw.get(2).toolCalls().get(0).name());
+        assertEquals("{\"command\":\"ls\"}", raw.get(2).toolCalls().get(0).arguments());
+        assertEquals("tool", raw.get(3).role());
+        assertEquals("call-1", raw.get(3).toolCallId());
+        assertEquals("file1", raw.get(3).content());
+        assertTrue(raw.get(4).content().startsWith(MemoryCompressor.SUMMARY_PREFIX));
+        assertEquals("and then", raw.get(5).content());
+    }
+
+    @Test
+    void rawHistoryKeepsStoredImageRefs() {
+        InMemorySessionStore store = new InMemorySessionStore();
+        Session session = store.create("ada", null);
+        session.memory().replaceAll(List.of(
+                ChatMessage.user("look", List.of("ref:" + session.id() + "/abc123"))));
+
+        ChatService service = new ChatService(
+                store, emptyLlmSettings(), emptyCompressorProvider(), List.of(),
+                emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
+
+        assertEquals(List.of("ref:" + session.id() + "/abc123"), service.rawHistory(session).get(0).images());
     }
 
     @Test

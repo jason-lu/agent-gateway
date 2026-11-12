@@ -3,6 +3,7 @@ package dev.kualu.web.api;
 import dev.kualu.web.api.ApiDtos.CreateSessionRequest;
 import dev.kualu.web.api.ApiDtos.HistoryMessage;
 import dev.kualu.web.api.ApiDtos.MessageResponse;
+import dev.kualu.web.api.ApiDtos.RawMessage;
 import dev.kualu.web.api.ApiDtos.SessionResponse;
 import dev.kualu.web.api.ApiDtos.SseDelta;
 import dev.kualu.web.api.ApiDtos.SseDone;
@@ -141,6 +142,23 @@ public class SessionController {
             return chatService.history(requireSession(username, id));
         } finally {
             turnMetrics.complete("history", id, timings);
+            TurnTimings.clear();
+        }
+    }
+
+    /**
+     * The unfiltered message log for JSON export/debugging: system prompts,
+     * memory-compression summaries, and tool traffic included. ADMIN-only
+     * (see the security rules in {@code AppConfig}); {@link #history} stays
+     * the clean transcript the chat window renders.
+     */
+    @GetMapping("/{id}/messages/raw")
+    public List<RawMessage> rawHistory(@AuthenticationPrincipal String username, @PathVariable String id) {
+        TurnTimings timings = TurnTimings.begin();
+        try {
+            return chatService.rawHistory(requireSession(username, id));
+        } finally {
+            turnMetrics.complete("raw-history", id, timings);
             TurnTimings.clear();
         }
     }

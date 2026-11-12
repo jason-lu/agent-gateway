@@ -23,6 +23,21 @@ public final class ApiDtos {
     public record HistoryMessage(String role, String content, List<String> images) {
     }
 
+    /** One tool call on an assistant turn, as stored ({@code tool_calls[]} entry). */
+    public record RawToolCall(String id, String name, String arguments) {
+    }
+
+    /**
+     * One stored turn in raw form for debug exports: every role including system
+     * prompts, memory-compression summaries (their content carries the
+     * {@code MemoryCompressor.SUMMARY_PREFIX} marker), and tool traffic. Images are
+     * returned as stored — {@code ref:<sessionId>/<imageId>} for externalised
+     * pixels, untouched data URIs otherwise.
+     */
+    public record RawMessage(String role, String content, String toolCallId, List<RawToolCall> toolCalls,
+            List<String> images) {
+    }
+
     public record HealthResponse(String status, boolean llmConfigured, boolean dbUp) {
     }
 

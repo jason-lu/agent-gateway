@@ -8,6 +8,8 @@ import dev.kualu.llm.metrics.TurnTimings;
 import dev.kualu.llm.tools.ToolLoop;
 import dev.kualu.mcp.McpConnectionManager;
 import dev.kualu.web.api.ApiDtos.HistoryMessage;
+import dev.kualu.web.api.ApiDtos.RawMessage;
+import dev.kualu.web.api.ApiDtos.RawToolCall;
 import dev.kualu.web.llm.LlmSettingsService;
 import dev.kualu.web.mcp.UserMcpRegistry;
 import dev.kualu.web.metrics.TurnMetrics;
@@ -185,6 +187,26 @@ public class ChatService {
                             message.images() == null ? null : message.images().stream()
                                     .map(image -> toDisplayUrl(session.id(), image))
                                     .toList()))
+                    .toList();
+        }
+    }
+
+    /**
+     * The unfiltered message log for debug exports: system prompts, compression
+     * summaries, and tool traffic included. Unlike {@link #history}, images are
+     * returned as stored and blank assistant turns are kept.
+     */
+    public List<RawMessage> rawHistory(Session session) {
+        synchronized (session.memory()) {
+            return session.memory().messages().stream()
+                    .map(message -> new RawMessage(
+                            message.role(),
+                            message.content(),
+                            message.toolCallId(),
+                            message.toolCalls() == null ? null : message.toolCalls().stream()
+                                    .map(call -> new RawToolCall(call.id(), call.name(), call.arguments()))
+                                    .toList(),
+                            message.images()))
                     .toList();
         }
     }

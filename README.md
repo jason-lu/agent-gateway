@@ -255,6 +255,7 @@ New passwords need at least 8 characters; a wrong `currentPassword` is `400`. Th
 | GET | `/api/v1/sessions/{id}` | USER | Session metadata |
 | DELETE | `/api/v1/sessions/{id}` | USER | Delete session |
 | GET | `/api/v1/sessions/{id}/messages` | USER | Message history |
+| GET | `/api/v1/sessions/{id}/messages/raw` | ADMIN | Raw message log (debug JSON export) |
 | GET | `/api/v1/sessions/{id}/images/{imageId}` | USER | Stored message image (raw bytes) |
 | POST | `/api/v1/sessions/{id}/messages` | USER | `{content, images?, providerId?, model?}` → `{reply}` |
 | POST | `/api/v1/sessions/{id}/messages/stream` | USER | `{content, images?, providerId?, model?}` → SSE stream |

@@ -181,6 +181,7 @@ public class AppConfig {
                                 "/actuator/health")
                         .permitAll()
                         .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
+                        .requestMatchers("/api/v1/sessions/*/messages/raw").hasRole("ADMIN")
                         .requestMatchers("/actuator/prometheus").access(metricsScrape(metricsScrapeToken))
                         .requestMatchers("/actuator/**").hasRole("ADMIN")
                         .requestMatchers("/api/v1/**").hasRole("USER")
