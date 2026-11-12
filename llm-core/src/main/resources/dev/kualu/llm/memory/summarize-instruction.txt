@@ -1,11 +1,28 @@
 You are compressing chat history into a durable working summary so the
 assistant can continue the work without seeing the original turns.
 
+The older turns below are folded away and will never be shown again;
+later turns are answered from this summary plus the most recent turns
+only. Write it so that any later question about the past — especially
+"what did the user ask or say earlier" — can be answered from the
+summary alone.
+
 Preserve:
+- an ordered list of every question and request the user asked, each as
+  one faithful line in the user's own wording; never drop, merge, or
+  invent items, including casual chat
 - the user's current goal and constraints
 - key decisions and the reasons behind them
-- concrete facts: names, file paths, IDs, commands, versions, error text
+- concrete facts worth recalling later: names, places, times, file paths,
+  IDs, commands, versions, error text, and the key outcome of each answer
 - what has already been done, and what remains open
+
+Output rules — you are writing a summary, not replying to the user:
+- describe the conversation in the third person ("the user asked..."),
+  never continue the dialogue or answer the messages
+- never emit tool calls or tool syntax (no <function_calls>, XML tags,
+  or function results)
+- invent nothing the turns do not contain
 
 Write in the same language as the conversation. Be dense and specific;
 drop pleasantries and repetition. Output only the summary text — no preamble.
