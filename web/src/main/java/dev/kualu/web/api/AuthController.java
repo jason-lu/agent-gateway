@@ -2,7 +2,10 @@ package dev.kualu.web.api;
 
 import dev.kualu.web.api.ApiDtos.LoginResponse;
 import dev.kualu.web.auth.RefreshTokenService;
+import dev.kualu.web.auth.UserAccountStore;
 import dev.kualu.web.auth.UserPasswordStore;
+import dev.kualu.web.invite.InviteCodeException;
+import dev.kualu.web.invite.InviteCodeService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -32,18 +35,24 @@ public class AuthController {
     private final PasswordEncoder passwordEncoder;
     private final UserPasswordStore passwordStore;
     private final RefreshTokenService refreshTokenService;
+    private final UserAccountStore accountStore;
+    private final InviteCodeService inviteCodes;
 
     public AuthController(
             AuthenticationManager authenticationManager,
             UserDetailsService userDetailsService,
             PasswordEncoder passwordEncoder,
             UserPasswordStore passwordStore,
-            RefreshTokenService refreshTokenService) {
+            RefreshTokenService refreshTokenService,
+            UserAccountStore accountStore,
+            InviteCodeService inviteCodes) {
         this.authenticationManager = authenticationManager;
         this.userDetailsService = userDetailsService;
         this.passwordEncoder = passwordEncoder;
         this.passwordStore = passwordStore;
         this.refreshTokenService = refreshTokenService;
+        this.accountStore = accountStore;
+        this.inviteCodes = inviteCodes;
     }
 
     @PostMapping("/login")
@@ -55,6 +64,30 @@ public class AuthController {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "invalid credentials");
         }
         return issue(userDetailsService.loadUserByUsername(body.username()));
+    }
+
+    /**
+     * Invite-based registration: the code is claimed exactly once and the new
+     * account starts with the {@code USER} role. The response is a full login
+     * pair, so the client can sign in immediately.
+     */
+    @PostMapping("/register")
+    public LoginResponse register(@Valid @RequestBody RegisterBody body) {
+        String username = body.username().trim();
+        if (accountStore.exists(username)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "用户名已存在");
+        }
+        try {
+            inviteCodes.consume(body.inviteCode(), username);
+        } catch (InviteCodeException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
+        }
+        try {
+            accountStore.create(username, passwordEncoder.encode(body.password()));
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "用户名已存在");
+        }
+        return issue(userDetailsService.loadUserByUsername(username));
     }
 
     /**
@@ -107,6 +140,12 @@ public class AuthController {
     public record LoginBody(
             @NotBlank String username,
             @NotBlank String password) {
+    }
+
+    public record RegisterBody(
+            @NotBlank String inviteCode,
+            @NotBlank @Size(min = 2, max = 64) String username,
+            @NotBlank @Size(min = 8, max = 128) String password) {
     }
 
     public record RefreshRequest(

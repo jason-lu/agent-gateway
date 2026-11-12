@@ -107,6 +107,35 @@ public class AppConfig {
         return new dev.kualu.web.llm.InMemoryUserLlmPreferenceStore();
     }
 
+    @Bean
+    @ConditionalOnProperty(name = "agent.store", havingValue = "memory")
+    public dev.kualu.web.email.EmailSettingsStore inMemoryEmailSettingsStore() {
+        return new dev.kualu.web.email.InMemoryEmailSettingsStore();
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "agent.store", havingValue = "memory")
+    public dev.kualu.web.invite.InviteCodeStore inMemoryInviteCodeStore() {
+        return new dev.kualu.web.invite.InMemoryInviteCodeStore();
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "agent.store", havingValue = "memory")
+    public dev.kualu.web.auth.UserAccountStore userAccountStore(InMemoryUserDetailsManager users) {
+        return new dev.kualu.web.auth.InMemoryUserAccountStore(users);
+    }
+
+    @Bean
+    public dev.kualu.web.email.EmailService emailService(dev.kualu.web.email.EmailSettingsStore store) {
+        return new dev.kualu.web.email.EmailService(store);
+    }
+
+    @Bean
+    public dev.kualu.web.invite.InviteCodeService inviteCodeService(
+            dev.kualu.web.invite.InviteCodeStore store, dev.kualu.web.email.EmailService emailService) {
+        return new dev.kualu.web.invite.InviteCodeService(store, emailService);
+    }
+
     /**
      * Seeds the primary provider from {@code llm.*} when the store is empty, so a fresh
      * deployment works before anyone opens the admin UI. Runs after Flyway (which is a
@@ -140,6 +169,7 @@ public class AppConfig {
                                 "/api/v1/auth/login",
                                 "/api/v1/auth/refresh",
                                 "/api/v1/auth/logout",
+                                "/api/v1/auth/register",
                                 "/api/v1/health",
                                 "/actuator/health")
                         .permitAll()

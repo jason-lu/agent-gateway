@@ -109,6 +109,54 @@ public final class ApiDtos {
             String status) {
     }
 
+    /**
+     * Outbound SMTP account used for invite mails. {@code password} is masked
+     * ({@code SettingsController.MASK}) — the real value never leaves the server.
+     */
+    public record EmailSettingsResponse(
+            String host,
+            int port,
+            String username,
+            String password,
+            String fromAddress,
+            boolean useSsl) {
+    }
+
+    /**
+     * Update body for the SMTP account. {@code password} follows the mask
+     * convention: {@code SettingsController.MASK} (or a blank) keeps the stored
+     * password, anything else replaces it.
+     */
+    public record EmailSettingsBody(
+            String host,
+            int port,
+            String username,
+            String password,
+            String fromAddress,
+            boolean useSsl) {
+    }
+
+    /** Test-send target; proves the stored SMTP account actually works. */
+    public record EmailTestBody(String to) {
+    }
+
+    /** One registration invite code and its delivery/consumption state. */
+    public record InviteCodeResponse(
+            String code,
+            String email,
+            String note,
+            String createdBy,
+            String createdAt,
+            String expiresAt,
+            String sentAt,
+            String usedBy,
+            String usedAt) {
+    }
+
+    /** Mint body for an invite code; {@code validDays} null uses the default window. */
+    public record InviteCodeBody(String email, String note, Integer validDays) {
+    }
+
     public record ErrorResponse(int status, String error, String message) {
     }
 

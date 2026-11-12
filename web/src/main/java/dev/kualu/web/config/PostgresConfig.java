@@ -115,6 +115,21 @@ public class PostgresConfig {
         return new dev.kualu.web.llm.PostgresUserLlmPreferenceStore(jdbc);
     }
 
+    @Bean
+    public dev.kualu.web.auth.UserAccountStore userAccountStore(JdbcTemplate jdbc) {
+        return new dev.kualu.web.auth.PostgresUserAccountStore(jdbc);
+    }
+
+    @Bean
+    public dev.kualu.web.email.EmailSettingsStore emailSettingsStore(JdbcTemplate jdbc) {
+        return new dev.kualu.web.email.PostgresEmailSettingsStore(jdbc);
+    }
+
+    @Bean
+    public dev.kualu.web.invite.InviteCodeStore inviteCodeStore(JdbcTemplate jdbc) {
+        return new dev.kualu.web.invite.PostgresInviteCodeStore(jdbc);
+    }
+
     /**
      * The database is often reachable over the public internet, so the URL must select a
      * TLS mode that cannot silently fall back to plaintext password auth. A deny-list is
