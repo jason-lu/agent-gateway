@@ -57,6 +57,21 @@ agent:
       output-limit: ${AGENT_MCP_OUTPUT_LIMIT:8000}
       refresh-seconds: ${AGENT_MCP_REFRESH:300}
       servers: []
+  asr:
+    enabled: ${AGENT_ASR_ENABLED:true}
+    provider: ${AGENT_ASR_PROVIDER:mimo}
+    language: ${AGENT_ASR_LANGUAGE:zh-CN}
+    vad-eos-ms: ${AGENT_ASR_VAD_EOS:1000}
+    # Xiaomi MiMo ASR (chat.completions + input_audio). The key falls back to the
+    # LLM key because both are the same MiMo platform credential by default.
+    mimo:
+      api-key: ${MIMO_API_KEY:${LLM_API_KEY:}}
+      base-url: ${MIMO_BASE_URL:https://api.xiaomimimo.com/v1}
+      model: ${MIMO_ASR_MODEL:mimo-v2.5-asr}
+    iflytek:
+      app-id: ${IFLYTEK_APP_ID:}
+      api-key: ${IFLYTEK_API_KEY:}
+      api-secret: ${IFLYTEK_API_SECRET:}
   security:
     jwt-secret: ${AGENT_JWT_SECRET:}
     jwt-ttl: ${AGENT_JWT_TTL:2h}

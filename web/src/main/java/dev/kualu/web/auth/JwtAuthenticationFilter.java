@@ -41,33 +41,47 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             HttpServletRequest request,
             HttpServletResponse response,
             FilterChain filterChain) throws ServletException, IOException {
-        String header = request.getHeader("Authorization");
-        if (header != null && header.startsWith("Bearer ")) {
-            String token = header.substring(7).trim();
-            jwtService.parse(token).ifPresent(claims -> {
-                if (SecurityContextHolder.getContext().getAuthentication() == null) {
-                    // The sid claim ties the access token to a refresh session: a revoked
-                    // or idle-expired session rejects the request even if the JWT itself
-                    // has not reached its exp. Accepting the request marks it active.
-                    if (!refreshTokenService.accept(claims.get("sid", String.class))) {
-                        return;
-                    }
-                    String username = claims.getSubject();
-                    @SuppressWarnings("unchecked")
-                    List<String> roles = claims.get("roles", List.class);
-                    List<SimpleGrantedAuthority> authorities = Optional.ofNullable(roles)
-                            .orElseGet(List::of)
-                            .stream()
-                            .map(role -> role.startsWith("ROLE_") ? role : "ROLE_" + role)
-                            .map(SimpleGrantedAuthority::new)
-                            .toList();
-                    var authentication = new UsernamePasswordAuthenticationToken(
-                            username, null, authorities);
-                    authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
-                    SecurityContextHolder.getContext().setAuthentication(authentication);
-                }
-            });
+        String token = bearerToken(request);
+        if (token == null) {
+            // Browser WebSockets cannot set headers, so the handshake carries the JWT
+            // as a query parameter instead. Same parse/accept/roles rules apply.
+            token = request.getParameter("token");
+        }
+        if (token != null) {
+            authenticate(token, request);
         }
         filterChain.doFilter(request, response);
+    }
+
+    /** @return the Bearer token from the {@code Authorization} header, or {@code null} when absent */
+    private static String bearerToken(HttpServletRequest request) {
+        String header = request.getHeader("Authorization");
+        return header != null && header.startsWith("Bearer ") ? header.substring(7).trim() : null;
+    }
+
+    private void authenticate(String token, HttpServletRequest request) {
+        jwtService.parse(token).ifPresent(claims -> {
+            if (SecurityContextHolder.getContext().getAuthentication() == null) {
+                // The sid claim ties the access token to a refresh session: a revoked
+                // or idle-expired session rejects the request even if the JWT itself
+                // has not reached its exp. Accepting the request marks it active.
+                if (!refreshTokenService.accept(claims.get("sid", String.class))) {
+                    return;
+                }
+                String username = claims.getSubject();
+                @SuppressWarnings("unchecked")
+                List<String> roles = claims.get("roles", List.class);
+                List<SimpleGrantedAuthority> authorities = Optional.ofNullable(roles)
+                        .orElseGet(List::of)
+                        .stream()
+                        .map(role -> role.startsWith("ROLE_") ? role : "ROLE_" + role)
+                        .map(SimpleGrantedAuthority::new)
+                        .toList();
+                var authentication = new UsernamePasswordAuthenticationToken(
+                        username, null, authorities);
+                authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+                SecurityContextHolder.getContext().setAuthentication(authentication);
+            }
+        });
     }
 }
