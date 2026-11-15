@@ -332,6 +332,31 @@ curl -N "http://127.0.0.1:8080/api/v1/sessions/$SID/messages/stream" \
   -d '{"content":"Tell me a short story"}'
 ```
 
+## Deployment (frontend and backend split)
+
+The web UI and the gateway deploy independently: the jar is a pure API service,
+and the frontend is a static Vite build served by nginx. Both are same-origin,
+so the frontend calls relative `/api/v1/...` URLs and needs no CORS.
+
+- **Frontend** lives in the sibling `frontend/` repository. `npm run build`
+  emits `frontend/dist`, and `frontend/deploy.ps1` uploads it to the nginx web
+  root (atomic swap; the previous release stays next to it as `*.old` for
+  rollback). A frontend deploy never restarts any service.
+- **Backend** is deployed by `agent/deploy.ps1`: `:web:bootJar` → upload jar +
+  `.env` + `mcp.json` → restart the `agent-web` unit → health check. The jar no
+  longer bundles the UI.
+
+The edge nginx serves the bundle from a read-only web root and proxies `/api/`
+and `/actuator/` to the gateway on `127.0.0.1:8080` — including WebSocket
+upgrades for the ASR stream and buffering-off for SSE chat streaming.
+Fingerprinted `/assets/` files are cached for a year (`immutable`); `index.html`
+is `no-cache`, so a deploy shows up on the next load.
+
+Both `deploy.ps1` scripts are workstation-local tooling (gitignored) because
+they carry the server address. Local development is unchanged: `npm run dev` on
+:5173 (its dev proxy forwards `/api` to `127.0.0.1:8080`) next to
+`./gradlew :web:bootRun`.
+
 ## Use as a library
 
 ### LLM client

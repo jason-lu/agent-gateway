@@ -13,29 +13,23 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Serving the static UI: fingerprinted {@code /assets/} files may be cached
- * forever while everything else keeps Spring Security's no-store so a deploy is
- * picked up on the next load, and a missing resource is a plain 404.
+ * Cache and 404 behaviour of the API surface: responses keep Spring Security's
+ * no-store so a deploy is picked up on the next load, and an unknown path is a
+ * plain JSON 404. (The static UI now lives behind nginx — see the frontend
+ * deploy — so asset caching is configured there, not here.)
  */
 @SpringBootTest(properties = {
         "agent.store=memory",
         "agent.security.jwt-secret=test-secret-test-secret-test-secret-1234"
 })
 @AutoConfigureMockMvc
-class StaticAssetCacheTest {
+class CacheHeadersIntegrationTest {
 
     @Autowired
     private MockMvc mockMvc;
 
     @Test
-    void fingerprintedAssetsAreCachedForever() throws Exception {
-        mockMvc.perform(get("/assets/cache-probe.js"))
-                .andExpect(status().isOk())
-                .andExpect(header().string("Cache-Control", "max-age=31536000, public, immutable"));
-    }
-
-    @Test
-    void everythingElseStaysUncached() throws Exception {
+    void apiResponsesStayUncached() throws Exception {
         mockMvc.perform(get("/api/v1/health"))
                 .andExpect(status().isOk())
                 .andExpect(header().string("Cache-Control", containsString("no-store")));
