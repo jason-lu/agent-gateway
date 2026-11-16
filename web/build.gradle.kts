@@ -26,6 +26,8 @@ dependencies {
     implementation("io.jsonwebtoken:jjwt-api:0.12.6")
     runtimeOnly("io.jsonwebtoken:jjwt-impl:0.12.6")
     runtimeOnly("io.jsonwebtoken:jjwt-jackson:0.12.6")
+    // Aliyun OSS for the optional agent.files.store=oss artifact backend.
+    implementation("com.aliyun.oss:aliyun-sdk-oss:3.18.1")
     // Jakarta Mail (SMTP sending for invite codes); version from the Spring Boot BOM.
     implementation("org.eclipse.angus:angus-mail")
 

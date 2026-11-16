@@ -12,7 +12,9 @@ import dev.kualu.web.api.ApiDtos.ErrorResponse;
 import dev.kualu.web.auth.InMemoryRefreshTokenStore;
 import dev.kualu.web.auth.JwtAuthenticationFilter;
 import dev.kualu.web.auth.UserPasswordStore;
-import dev.kualu.web.files.FileArtifactStore;
+import dev.kualu.web.files.ArtifactStore;
+import dev.kualu.web.files.LocalArtifactStore;
+import dev.kualu.web.files.OssArtifactStore;
 import dev.kualu.web.session.ImageRef;
 import dev.kualu.web.session.SessionStore;
 import jakarta.servlet.http.HttpServletRequest;
@@ -274,14 +276,22 @@ public class AppConfig {
     }
 
     /**
-     * Root for downloadable tool artifacts. Must match the office-mcp server's
-     * {@code OFFICE_OUTPUT_DIR} — this store only serves what tools produced there.
+     * Where downloadable tool artifacts live. Local dir by default (must match
+     * the office-mcp server's {@code OFFICE_OUTPUT_DIR}); {@code agent.files.store=oss}
+     * proxies reads from the same Aliyun OSS bucket the office-mcp server uploads to.
      */
-    @Bean
-    public FileArtifactStore fileArtifactStore(FileProperties properties) {
+    @Bean(destroyMethod = "close")
+    public ArtifactStore fileArtifactStore(FileProperties properties) {
+        if ("oss".equals(properties.store())) {
+            FileProperties.Oss oss = properties.oss();
+            log.info("file-artifacts configured: store=oss endpoint={} bucket={} prefix={}",
+                    oss.endpoint(), oss.bucket(), oss.prefix());
+            return new OssArtifactStore(oss.endpoint(), oss.bucket(), oss.prefix(),
+                    oss.accessKeyId(), oss.accessKeySecret());
+        }
         Path root = Path.of(properties.dir());
-        log.info("file-artifacts configured: dir={}", root.toAbsolutePath().normalize());
-        return new FileArtifactStore(root);
+        log.info("file-artifacts configured: store=local dir={}", root.toAbsolutePath().normalize());
+        return new LocalArtifactStore(root);
     }
 
     /**

@@ -1,13 +1,12 @@
 package dev.kualu.web;
 
-import dev.kualu.web.files.FileArtifactStore;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -28,6 +27,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @SpringBootTest(properties = {
         "agent.store=memory",
+        "agent.files.store=local",
         "agent.security.jwt-secret=test-secret-test-secret-test-secret-1234",
         "agent.security.users[0].username=alice",
         "agent.security.users[0].password=password123",
@@ -40,12 +40,9 @@ class FileArtifactIntegrationTest {
     @Autowired
     private MockMvc mockMvc;
 
-    @Autowired
-    private FileArtifactStore store;
-
     @BeforeEach
     void seed() throws IOException {
-        Path file = store.resolve("reports/q1.xlsx");
+        Path file = Path.of("build/test-artifact-files/reports/q1.xlsx");
         Files.createDirectories(file.getParent());
         Files.write(file, "fake-xlsx-bytes".getBytes(StandardCharsets.UTF_8));
     }

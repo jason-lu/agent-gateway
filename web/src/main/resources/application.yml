@@ -31,9 +31,18 @@ agent:
     scrape-token: ${AGENT_METRICS_TOKEN:}
   store: ${AGENT_STORE:postgres}
   files:
-    # Downloadable tool artifacts; must match the office-mcp server's
-    # OFFICE_OUTPUT_DIR — this is where /api/v1/files/** serves from.
+    # Downloadable tool artifacts (/api/v1/files/**). store=local (default)
+    # serves from dir; store=oss proxies reads from the Aliyun OSS bucket the
+    # office-mcp server uploads to (same prefix). In local mode dir must match
+    # the office-mcp server's OFFICE_OUTPUT_DIR.
+    store: ${OFFICE_STORE:local}
     dir: ${AGENT_FILES_DIR:output/office}
+    oss:
+      endpoint: ${OSS_ENDPOINT:}
+      bucket: ${OSS_BUCKET:}
+      prefix: ${OSS_PREFIX:office/}
+      access-key-id: ${OSS_ACCESS_KEY_ID:}
+      access-key-secret: ${OSS_ACCESS_KEY_SECRET:}
   db:
     url: ${AGENT_DB_URL:}
     username: ${AGENT_DB_USERNAME:postgres}

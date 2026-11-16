@@ -8,25 +8,25 @@ import java.nio.file.Path;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-class FileArtifactStoreTest {
+class LocalArtifactStoreTest {
 
     @TempDir
     Path temp;
 
-    private FileArtifactStore store() {
-        return new FileArtifactStore(temp.resolve("out"));
+    private LocalArtifactStore store() {
+        return new LocalArtifactStore(temp.resolve("out"));
     }
 
     @Test
     void resolvesNestedRelativeName() {
-        FileArtifactStore store = store();
+        LocalArtifactStore store = store();
         Path resolved = store.resolve("reports/q1.xlsx");
         assertThat(resolved).isEqualTo(store.root().resolve("reports").resolve("q1.xlsx"));
     }
 
     @Test
     void normalisesBackslashes() {
-        FileArtifactStore store = store();
+        LocalArtifactStore store = store();
         assertThat(store.resolve("reports\\q1.xlsx")).isEqualTo(store.resolve("reports/q1.xlsx"));
     }
 
@@ -38,7 +38,7 @@ class FileArtifactStoreTest {
 
     @Test
     void rejectsAbsolutePaths() {
-        FileArtifactStore store = store();
+        LocalArtifactStore store = store();
         assertThatThrownBy(() -> store.resolve("/etc/passwd"))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> store.resolve("C:\\Windows\\win.ini"))
@@ -47,7 +47,7 @@ class FileArtifactStoreTest {
 
     @Test
     void rejectsDotDot() {
-        FileArtifactStore store = store();
+        LocalArtifactStore store = store();
         assertThatThrownBy(() -> store.resolve("../secret.xlsx"))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> store.resolve("reports/../../secret.xlsx"))
@@ -56,7 +56,7 @@ class FileArtifactStoreTest {
 
     @Test
     void rootIsCreated() {
-        FileArtifactStore store = store();
+        LocalArtifactStore store = store();
         assertThat(store.root()).isDirectory();
     }
 }
