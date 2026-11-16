@@ -12,6 +12,7 @@ import dev.kualu.web.api.ApiDtos.ErrorResponse;
 import dev.kualu.web.auth.InMemoryRefreshTokenStore;
 import dev.kualu.web.auth.JwtAuthenticationFilter;
 import dev.kualu.web.auth.UserPasswordStore;
+import dev.kualu.web.files.FileArtifactStore;
 import dev.kualu.web.session.ImageRef;
 import dev.kualu.web.session.SessionStore;
 import jakarta.servlet.http.HttpServletRequest;
@@ -270,6 +271,17 @@ public class AppConfig {
                 Duration.ofSeconds(properties.timeoutSeconds()),
                 properties.outputLimit(),
                 workdir == null ? null : Path.of(workdir)));
+    }
+
+    /**
+     * Root for downloadable tool artifacts. Must match the office-mcp server's
+     * {@code OFFICE_OUTPUT_DIR} — this store only serves what tools produced there.
+     */
+    @Bean
+    public FileArtifactStore fileArtifactStore(FileProperties properties) {
+        Path root = Path.of(properties.dir());
+        log.info("file-artifacts configured: dir={}", root.toAbsolutePath().normalize());
+        return new FileArtifactStore(root);
     }
 
     /**

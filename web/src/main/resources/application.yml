@@ -30,6 +30,10 @@ agent:
     # login like every other actuator endpoint.
     scrape-token: ${AGENT_METRICS_TOKEN:}
   store: ${AGENT_STORE:postgres}
+  files:
+    # Downloadable tool artifacts; must match the office-mcp server's
+    # OFFICE_OUTPUT_DIR — this is where /api/v1/files/** serves from.
+    dir: ${AGENT_FILES_DIR:output/office}
   db:
     url: ${AGENT_DB_URL:}
     username: ${AGENT_DB_USERNAME:postgres}
