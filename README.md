@@ -116,7 +116,7 @@ By default the full history is sent with every request, so long conversations gr
 - The most recent `keep-messages` turns (default 8) always stay verbatim; the cut never splits a turn and never orphans a tool result.
 - The summary is regenerated incrementally — the previous summary plus the turns that just aged out — so the cost does not grow with the conversation.
 - The summary body is capped at `max-summary-chars` (default 4000): the summarisation call passes the same number as `max_tokens`, and any overlong output is truncated, so the payload stays bounded even over very long sessions.
-- Request layout: `[system prompt][summary][recent turns]`. The summary carries the `【历史对话摘要】` marker and is hidden from `/history` and from `GET /api/v1/sessions/{id}/messages`.
+- Request layout: `[tool policy][system prompt][summary][recent turns]`. The tool policy (a standing system message from `tool-policy.txt`) leads the request only while tools are on offer and is never stored. The summary carries the `【历史对话摘要】` marker and is hidden from `/history` and from `GET /api/v1/sessions/{id}/messages`.
 - Compression runs **after** the turn, on a background thread, so the user never waits for the summariser: the turn that crosses the threshold pays one uncompressed payload, and the next turn already sees the folded context. The fold is prepared and applied under the session lock; the summarisation call runs outside it. If the summarisation call fails the history is left untouched and the next turn retries.
 
 The summarisation prompt lives in its own file so it can be tuned without touching code:

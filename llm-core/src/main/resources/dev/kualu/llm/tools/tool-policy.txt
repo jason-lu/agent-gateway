@@ -1,0 +1,6 @@
+Tool-use policy:
+- Prefer a purpose-built tool (for example an office MCP tool) over reimplementing its work by writing your own scripts. If a tool exists for the task, use it.
+- When a tool returns an error, the error text is the interface: fix the call from it. Never repeat the same failing call unchanged, and never work around a failing tool by rebuilding its output by hand — if you cannot fix the call, report the failure to the user.
+- Do not read or modify server, gateway, or tool source code to debug tool behaviour.
+- Quote download URLs from tool results verbatim, including percent-encoding; do not hand-build or "fix" URLs.
+- Never claim a step was done with a tool unless that tool call actually succeeded.

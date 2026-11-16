@@ -12,6 +12,10 @@ import dev.kualu.llm.metrics.TurnTimings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -31,12 +35,36 @@ import java.util.function.Supplier;
  *
  * <p>The tool list may come from a {@link Supplier} and is snapshotted at the start
  * of every run, so dynamically discovered tools (e.g. MCP) can appear or disappear
- * between turns without restarting the loop.
+ * between turns without restarting the loop. When tools are on offer, the request
+ * payload leads with the standing {@link #TOOL_POLICY} system message (request-only;
+ * it is never stored in the memory).</p>
  */
 public final class ToolLoop {
 
     /** Upper bound on model calls per run; each round may request and execute tools. */
-    public static final int DEFAULT_MAX_ROUNDS = 8;
+    public static final int DEFAULT_MAX_ROUNDS = 30;
+
+    /** Name of the classpath resource holding the standing tool-use policy. */
+    static final String TOOL_POLICY_RESOURCE = "tool-policy.txt";
+
+    /**
+     * Standing tool-use policy, prepended to the request when tools are on offer.
+     * Kept in a resource so it can be tuned without touching code (same boundary
+     * as the summarisation instruction: wording in the file, assembly in code).
+     */
+    public static final String TOOL_POLICY = loadToolPolicy();
+
+    private static String loadToolPolicy() {
+        try (InputStream in = ToolLoop.class.getResourceAsStream(TOOL_POLICY_RESOURCE)) {
+            if (in == null) {
+                throw new IllegalStateException("missing resource "
+                        + ToolLoop.class.getPackageName().replace('.', '/') + "/" + TOOL_POLICY_RESOURCE);
+            }
+            return new String(in.readAllBytes(), StandardCharsets.UTF_8).strip();
+        } catch (IOException ex) {
+            throw new UncheckedIOException(ex);
+        }
+    }
 
     private static final Logger log = LoggerFactory.getLogger(ToolLoop.class);
 
@@ -122,6 +150,11 @@ public final class ToolLoop {
         ToolSet toolSet = snapshot();
 
         List<ChatMessage> payload = new ArrayList<>(memory.context());
+        if (!toolSet.specs().isEmpty()) {
+            // The policy leads the request whenever tools are on offer. It is
+            // request-only — never stored, so history and folding are untouched.
+            payload.add(0, ChatMessage.system(TOOL_POLICY));
+        }
         payload.add(userTurn);
         List<ChatMessage> turns = new ArrayList<>();
         StringBuilder reply = new StringBuilder();

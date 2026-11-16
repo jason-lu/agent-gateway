@@ -126,10 +126,36 @@ class ToolLoopTest {
         assertEquals("assistant", messages.get(3).role());
         assertEquals("done", messages.get(3).content());
 
-        // Second request carried the tool round for the model to see.
+        // Second request carried the tool round for the model to see (the
+        // tool policy leads the request when tools are on offer).
         List<ChatMessage> secondRequest = llm.requests.get(1);
-        assertEquals("assistant", secondRequest.get(1).role());
-        assertEquals("tool", secondRequest.get(2).role());
+        assertEquals("assistant", secondRequest.get(2).role());
+        assertEquals("tool", secondRequest.get(3).role());
+    }
+
+    @Test
+    void toolPolicyLeadsTheRequestOnlyWhenToolsAreOnOffer() {
+        ScriptedLlm withTools = new ScriptedLlm();
+        withTools.replyWith("ok");
+        new ToolLoop(withTools, List.of(new RecordingTool())).run(new ConversationMemory(), "go");
+
+        List<ChatMessage> request = withTools.requests.get(0);
+        assertEquals("system", request.get(0).role());
+        assertEquals(ToolLoop.TOOL_POLICY, request.get(0).content());
+        assertEquals("user", request.get(1).role());
+
+        // No tools: the plain path sends the payload unchanged.
+        List<ChatMessage> plain = new ArrayList<>();
+        LlmClient bare = new LlmClient(new LlmConfig("http://localhost", "key", "model")) {
+            @Override
+            public String chat(List<ChatMessage> messages) {
+                plain.addAll(messages);
+                return "plain";
+            }
+        };
+        new ToolLoop(bare, List.of()).run(new ConversationMemory(), "go");
+
+        assertEquals("user", plain.get(0).role());
     }
 
     @Test
