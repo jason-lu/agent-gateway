@@ -94,8 +94,9 @@ public final class StdioTransport implements McpTransport {
         }
     }
 
-    private static Process newProcess(List<String> argv) throws IOException {
+    private Process newProcess(List<String> argv) throws IOException {
         ProcessBuilder builder = new ProcessBuilder(argv);
+        builder.environment().putAll(environment);
         return builder.start();
     }
 

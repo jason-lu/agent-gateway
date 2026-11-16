@@ -7,6 +7,9 @@ import java.io.File;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -58,6 +61,28 @@ class StdioTransportTest {
         StdioTransport transport = new StdioTransport(List.of("definitely-not-a-command-xyz"), null);
         McpSession session = new McpSession(transport);
         assertThrows(McpException.class, () -> session.open(Duration.ofSeconds(5)));
+    }
+
+    @Test
+    void childProcessReceivesConfiguredEnvironment() throws Exception {
+        String java = Path.of(System.getProperty("java.home"), "bin",
+                System.getProperty("os.name").toLowerCase().contains("win") ? "java.exe" : "java").toString();
+        String classpath = System.getProperty("java.class.path")
+                + File.pathSeparator + new File("build/classes/java/test").getAbsolutePath();
+        StdioTransport transport = new StdioTransport(
+                List.of(java, "-cp", classpath, EnvEcho.class.getName()),
+                Map.of("MCP_ENV_PROBE", "hello"));
+        try {
+            CompletableFuture<String> got = new CompletableFuture<>();
+            transport.start(message -> {
+                if (message.has("result")) {
+                    got.complete(message.get("result").getAsString());
+                }
+            }, () -> { });
+            assertEquals("hello", got.get(TIMEOUT.toSeconds(), TimeUnit.SECONDS));
+        } finally {
+            transport.close();
+        }
     }
 
     private static StdioTransport fakeServerTransport() {
