@@ -196,6 +196,25 @@ Tools are discovered at startup and refreshed on `notifications/tools/list_chang
 
 > **Security note:** MCP servers are third-party code. A stdio server runs as a **local child process** (same trust level as the exec tool) and a remote server receives **your credentials** — configure only servers you trust. Remote URLs are forced to HTTPS (loopback excepted) so tokens never cross the network in plaintext. Tool results are untrusted input to the model (prompt-injection surface). Keep `mcp.json` files with secrets out of version control.
 
+## Content moderation
+
+User input and model output are both checked before they reach the model or the screen: a lexicon fast path (Aho-Corasick + variant folding: NFKC, traditional→simplified, confusables, separator stripping) plus an optional LLM classifier on a flash-tier model. Findings are classified into the closed categories in `docs/compose/spec/content-moderation.md` (violence, national-security, hate/anti-humanity, crime, fraud, self-harm, abuse) and disposed by severity: HIGH/MEDIUM block, LOW redacts (spans masked to `***`), and the classifier's unsure verdicts are recorded for review instead of blocked.
+
+| Key | Env | Default | Notes |
+|---|---|---|---|
+| `agent.moderation.enabled` | `AGENT_MODERATION_ENABLED` | `true` (web) / `false` (CLI) | Master switch |
+| `agent.moderation.mode` | `AGENT_MODERATION_MODE` | `block` | `flag` = gray release: audit only, nothing intercepted |
+| `agent.moderation.lexicon-path` | `AGENT_MODERATION_LEXICON_PATH` | `classpath:moderation/lexicon.json` | File paths hot-reload on change |
+| `agent.moderation.llm.enabled` | `AGENT_MODERATION_LLM_ENABLED` | `true` | L2 classifier |
+| `agent.moderation.llm.provider` / `.model` | `AGENT_MODERATION_LLM_PROVIDER` / `_MODEL` | empty → default chat model | **Prefer a flash-tier model** (e.g. `mimo-v2.6-flash`) |
+| `agent.moderation.llm.timeout-ms` | `AGENT_MODERATION_LLM_TIMEOUT_MS` | `800` | Timeout degrades to the lexicon verdict |
+
+**Gray-release path:** the bundled lexicon (`llm-core/src/main/resources/moderation/lexicon.json`) is a *skeleton* — placeholder terms only. Ship with `AGENT_MODERATION_MODE=flag`, let `agent.moderation_events` collect findings, triage them in the admin review queue (`GET /api/v1/admin/moderation/events`, `POST .../events/{id}/review` with `override=CONFIRM|NONE`), export the labels (`GET .../events/export?kind=confirm|none`), fold them into an ops-owned lexicon file (outside the repo, hot-reloaded), then switch to `mode=block` once the false-positive rate settles.
+
+Blocked turns never enter conversation history or the model (the turn is replaced by a placeholder); blocked replies are replaced by a standard refusal. The audit log stores only a masked excerpt and a hash — never the raw violating text. Review APIs require the `ADMIN` role.
+
+> **Security note:** moderation is a compliance layer, not a security boundary. The lexicon is ops-maintained data, not code; keep the classifier on a cheap model so it stays off the chat model's critical path. The refusal wording never names the rule or term — probing defenses is a real risk.
+
 ## Run the web gateway
 
 ```bash
@@ -268,11 +287,16 @@ New passwords need at least 8 characters; a wrong `currentPassword` is `400`. Th
 | DELETE | `/api/v1/admin/llm-providers/{id}` | ADMIN | Delete provider (`409` while it is the primary) |
 | POST | `/api/v1/admin/llm-providers/{id}/primary` | ADMIN | Make this provider the primary default |
 | POST | `/api/v1/admin/llm-providers/models` | ADMIN | Probe a draft connection's models `{id?, baseUrl?, apiKey?}` |
+| GET | `/api/v1/admin/moderation/events` | ADMIN | Moderation audit page (`?reviewed=&needsReview=&page=&size=`) |
+| GET | `/api/v1/admin/moderation/events/export` | ADMIN | Reviewed samples (`?kind=confirm` true positives / `?kind=none` false kills) |
+| POST | `/api/v1/admin/moderation/events/{id}/review` | ADMIN | Reviewer verdict `{note?, override?}` (`CONFIRM`/`NONE`) |
 
-SSE events: `delta` (`{"text"}`), then `done` (`{"reply"}`) or `error` (`{"message"}`).
+SSE events: `delta` (`{"text"}`), then `done` (`{"reply"}`) or `error` (`{"message"}`);
+content moderation adds `moderation` (`{"action","category","direction"}`) before the close.
 
 Error body: `{ "status", "error", "message" }`.
-Chat is `503` when LLM is not configured, `502` when the upstream LLM fails.
+Chat is `503` when LLM is not configured, `502` when the upstream LLM fails,
+`422` with `"error": "content_blocked"` when moderation refuses the turn.
 
 **Image input (vision).** A message may carry `images`: up to 10 entries, each a
 `data:image/...` base64 URI or an `http(s)` image URL (≤ 25M characters each).

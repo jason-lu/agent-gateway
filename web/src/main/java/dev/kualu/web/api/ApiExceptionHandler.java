@@ -52,6 +52,19 @@ public class ApiExceptionHandler {
         return body(HttpStatus.BAD_GATEWAY, ex.getMessage());
     }
 
+    /**
+     * Content moderation refused the turn. The error code is stable for client
+     * handling; the message never names the rule or the matched term.
+     */
+    @ExceptionHandler(dev.kualu.llm.moderation.ModerationBlockedException.class)
+    public ResponseEntity<ErrorResponse> handleModeration(dev.kualu.llm.moderation.ModerationBlockedException ex) {
+        log.info("moderation blocked a turn: direction={} category={}", ex.direction(), ex.hit().category());
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+                .body(new ErrorResponse(HttpStatus.UNPROCESSABLE_ENTITY.value(),
+                        dev.kualu.llm.moderation.ModerationMessages.ERROR_CODE,
+                        dev.kualu.llm.moderation.ModerationMessages.BLOCK_MESSAGE));
+    }
+
     @ExceptionHandler(ResponseStatusException.class)
     public ResponseEntity<ErrorResponse> handleStatus(ResponseStatusException ex) {
         HttpStatus status = HttpStatus.resolve(ex.getStatusCode().value());

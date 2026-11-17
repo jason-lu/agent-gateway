@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "categories": {
+    "VIOLENCE": {
+      "severity": "HIGH",
+      "terms": [
+        {"pattern": "暴力示例词", "type": "exact"}
+      ]
+    },
+    "FRAUD": {
+      "severity": "MEDIUM",
+      "terms": [
+        {"pattern": "诈骗示例词", "type": "exact"}
+      ]
+    },
+    "ABUSE": {
+      "severity": "LOW",
+      "terms": [
+        {"pattern": "脏话示例", "type": "exact"}
+      ]
+    }
+  }
+}

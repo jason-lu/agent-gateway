@@ -13,6 +13,7 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.io.UncheckedIOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -34,6 +35,7 @@ public class ChatConsole {
     private final ConversationMemory memory;
     private final MemoryCompressor compressor;
     private final ToolLoop toolLoop;
+    private final dev.kualu.llm.moderation.ContentModerator moderator;
     private boolean streaming;
 
     /** Runs without memory compression or tools. */
@@ -56,12 +58,20 @@ public class ChatConsole {
     /** @param tools supplies the tool list once per turn (e.g. dynamic MCP tools) */
     public ChatConsole(LlmClient client, BufferedReader in, PrintStream out, boolean streaming,
                        MemoryCompressor compressor, java.util.function.Supplier<List<AgentTool>> tools) {
+        this(client, in, out, streaming, compressor, tools, null);
+    }
+
+    /** @param moderator content-moderation pipeline; {@code null} disables moderation */
+    public ChatConsole(LlmClient client, BufferedReader in, PrintStream out, boolean streaming,
+                       MemoryCompressor compressor, java.util.function.Supplier<List<AgentTool>> tools,
+                       dev.kualu.llm.moderation.ContentModerator moderator) {
         this.client = Objects.requireNonNull(client, "client");
         this.in = Objects.requireNonNull(in, "in");
         this.out = Objects.requireNonNull(out, "out");
         this.memory = new ConversationMemory();
         this.compressor = compressor;
         this.toolLoop = new ToolLoop(client, tools);
+        this.moderator = moderator;
         this.streaming = streaming;
     }
 
@@ -207,6 +217,21 @@ public class ChatConsole {
     }
 
     private void sendToLlm(String message) {
+        String effective = message;
+        if (moderator != null) {
+            var hit = moderator.checkInput(message);
+            if (hit.isPresent()) {
+                printFinding(hit.get(), dev.kualu.llm.moderation.Direction.INPUT);
+                switch (hit.get().action()) {
+                    case BLOCK -> {
+                        return;
+                    }
+                    case REDACT -> effective = moderator.redact(message, hit.get());
+                    case FLAG -> {
+                    }
+                }
+            }
+        }
         if (compressor != null) {
             compressor.maybeCompress(memory, "cli");
         }
@@ -215,18 +240,79 @@ public class ChatConsole {
         try {
             String reply;
             if (streaming) {
-                reply = toolLoop.run(memory, message, delta -> {
-                    out.print(delta);
-                    out.flush();
-                });
+                if (moderator != null) {
+                    var gate = new dev.kualu.llm.moderation.SegmentGate(moderator, this::printDelta);
+                    reply = toolLoop.run(memory, effective, gate);
+                    gate.finish();
+                } else {
+                    reply = toolLoop.run(memory, effective, this::printDelta);
+                }
+                out.println();
+                // The segments are already on screen; an L2-only finding is fixed
+                // up here so history matches what the user is told.
+                String finalReply = gateOutput(reply);
+                if (!finalReply.equals(reply)) {
+                    out.println(finalReply);
+                }
             } else {
-                reply = toolLoop.run(memory, message);
-                out.print(reply);
+                reply = toolLoop.run(memory, effective);
+                out.print(gateOutput(reply));
+                out.println();
             }
-            out.println();
+        } catch (dev.kualu.llm.moderation.ModerationBlockedException ex) {
+            printFinding(ex.hit(), dev.kualu.llm.moderation.Direction.OUTPUT);
+            rewriteLastAssistant(dev.kualu.llm.moderation.ModerationMessages.OUTPUT_REFUSAL);
+            out.println(dev.kualu.llm.moderation.ModerationMessages.OUTPUT_REFUSAL);
         } catch (LlmException e) {
             out.println();
             out.println("error: " + e.getMessage());
+        }
+    }
+
+    private void printDelta(String delta) {
+        out.print(delta);
+        out.flush();
+    }
+
+    /** Output gate after a completed reply: rewrites history to the effective text. */
+    private String gateOutput(String reply) {
+        if (moderator == null) {
+            return reply;
+        }
+        var hit = moderator.checkOutput(reply);
+        if (hit.isEmpty()) {
+            return reply;
+        }
+        printFinding(hit.get(), dev.kualu.llm.moderation.Direction.OUTPUT);
+        return switch (hit.get().action()) {
+            case BLOCK -> {
+                rewriteLastAssistant(dev.kualu.llm.moderation.ModerationMessages.OUTPUT_REFUSAL);
+                yield dev.kualu.llm.moderation.ModerationMessages.OUTPUT_REFUSAL;
+            }
+            case REDACT -> {
+                String masked = moderator.redact(reply, hit.get());
+                rewriteLastAssistant(masked);
+                yield masked;
+            }
+            case FLAG -> reply;
+        };
+    }
+
+    private void printFinding(dev.kualu.llm.moderation.ModerationHit hit,
+                              dev.kualu.llm.moderation.Direction direction) {
+        out.println();
+        out.println("⚠ 内容未通过安全检查（类目：" + hit.category() + "，方向：" + direction + "）");
+    }
+
+    private void rewriteLastAssistant(String newContent) {
+        List<ChatMessage> messages = new ArrayList<>(memory.messages());
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            ChatMessage message = messages.get(i);
+            if ("assistant".equals(message.role())) {
+                messages.set(i, new ChatMessage("assistant", newContent, message.toolCallId(), message.toolCalls()));
+                memory.replaceAll(messages);
+                return;
+            }
         }
     }
 

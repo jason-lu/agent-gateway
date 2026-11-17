@@ -8,6 +8,7 @@ import dev.kualu.web.api.ApiDtos.SessionResponse;
 import dev.kualu.web.api.ApiDtos.SseDelta;
 import dev.kualu.web.api.ApiDtos.SseDone;
 import dev.kualu.web.api.ApiDtos.SseError;
+import dev.kualu.web.api.ApiDtos.SseModeration;
 import dev.kualu.llm.metrics.TurnTimings;
 import dev.kualu.web.chat.ChatService;
 import dev.kualu.web.chat.LlmNotConfiguredException;
@@ -209,6 +210,25 @@ public class SessionController {
                 });
                 emitter.send(SseEmitter.event().name("done").data(new SseDone(reply)));
                 emitter.complete();
+            } catch (dev.kualu.llm.moderation.ModerationBlockedException ex) {
+                // Content moderation refused the turn: a structured event for the
+                // UI, then close with the standard wording (never the rule or term).
+                log.info("moderation blocked a stream for session={}: direction={} category={}",
+                        id, ex.direction(), ex.hit().category());
+                try {
+                    emitter.send(SseEmitter.event().name("moderation").data(new SseModeration(
+                            "blocked", ex.hit().category().name(), ex.direction().name())));
+                    if (ex.direction() == dev.kualu.llm.moderation.Direction.OUTPUT) {
+                        emitter.send(SseEmitter.event().name("done")
+                                .data(new SseDone(dev.kualu.llm.moderation.ModerationMessages.OUTPUT_REFUSAL)));
+                    } else {
+                        emitter.send(SseEmitter.event().name("error")
+                                .data(new SseError(dev.kualu.llm.moderation.ModerationMessages.BLOCK_MESSAGE)));
+                    }
+                    emitter.complete();
+                } catch (Exception ignored) {
+                    emitter.completeWithError(ex);
+                }
             } catch (Exception ex) {
                 String message = ex instanceof LlmNotConfiguredException
                         ? ex.getMessage()

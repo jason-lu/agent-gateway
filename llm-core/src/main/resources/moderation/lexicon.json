@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "_comment": "示例骨架词表——上线即用 agent.moderation.mode=flag 灰度收集，经复核 API 标注回流迭代后再切 block。运行期可外置为文件热加载（agent.moderation.lexicon-path）。词条是占位示例，不代表真实策略；类目与严重级见 content-moderation spec。",
+  "categories": {
+    "VIOLENCE": {
+      "severity": "HIGH",
+      "terms": [
+        {"pattern": "暴力示例词", "type": "exact"},
+        {"pattern": "暴*力*示*例*词", "type": "wildcard"}
+      ]
+    },
+    "REACTIONARY": {
+      "severity": "HIGH",
+      "terms": []
+    },
+    "ANTI_HUMANITY": {
+      "severity": "HIGH",
+      "terms": []
+    },
+    "CRIME": {
+      "severity": "HIGH",
+      "terms": []
+    },
+    "FRAUD": {
+      "severity": "MEDIUM",
+      "terms": [
+        {"pattern": "诈骗示例词", "type": "exact"}
+      ]
+    },
+    "SELF_HARM": {
+      "severity": "MEDIUM",
+      "terms": [
+        {"pattern": "自伤示例词", "type": "exact"}
+      ]
+    },
+    "ABUSE": {
+      "severity": "LOW",
+      "terms": [
+        {"pattern": "脏话示例", "type": "exact"}
+      ]
+    }
+  }
+}

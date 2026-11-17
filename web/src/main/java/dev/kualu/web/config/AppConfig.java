@@ -135,6 +135,12 @@ public class AppConfig {
     }
 
     @Bean
+    @ConditionalOnProperty(name = "agent.store", havingValue = "memory")
+    public dev.kualu.web.moderation.ModerationEventStore inMemoryModerationEventStore() {
+        return new dev.kualu.web.moderation.InMemoryModerationEventStore();
+    }
+
+    @Bean
     public dev.kualu.web.email.EmailService emailService(dev.kualu.web.email.EmailSettingsStore store) {
         return new dev.kualu.web.email.EmailService(store);
     }

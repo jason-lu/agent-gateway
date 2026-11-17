@@ -55,6 +55,22 @@ agent:
     instruction: ${AGENT_MEMORY_INSTRUCTION:}
     summary-provider: ${AGENT_MEMORY_SUMMARY_PROVIDER:}
     summary-model: ${AGENT_MEMORY_SUMMARY_MODEL:}
+  moderation:
+    # Content moderation: lexicon fast path + LLM classifier + review queue.
+    # mode=flag is the gray-release mode (audit only, nothing intercepted);
+    # mode=block enforces the disposition matrix. See docs/compose/spec/content-moderation.md.
+    enabled: ${AGENT_MODERATION_ENABLED:true}
+    mode: ${AGENT_MODERATION_MODE:block}
+    # classpath:moderation/lexicon.json (shared skeleton) or a file path
+    # (hot-reloaded on mtime change).
+    lexicon-path: ${AGENT_MODERATION_LEXICON_PATH:classpath:moderation/lexicon.json}
+    llm:
+      # L2 classifier; prefer a flash-tier model (see AGENT_MEMORY_SUMMARY_MODEL
+      # for the same resolution pattern). Falls back to the default chat model.
+      enabled: ${AGENT_MODERATION_LLM_ENABLED:true}
+      provider: ${AGENT_MODERATION_LLM_PROVIDER:}
+      model: ${AGENT_MODERATION_LLM_MODEL:}
+      timeout-ms: ${AGENT_MODERATION_LLM_TIMEOUT_MS:800}
   tools:
     exec:
       # Allows the model to run system commands through the exec tool.

@@ -28,6 +28,14 @@ class ChatServiceStreamTest {
         return new TurnMetrics(new SimpleMeterRegistry());
     }
 
+    /** Moderation off: these tests exercise stream plumbing, not content safety. */
+    private static dev.kualu.web.moderation.ModerationService disabledModeration() {
+        return new dev.kualu.web.moderation.ModerationService(
+                new dev.kualu.web.moderation.ModerationProperties(false, null, null, null),
+                new dev.kualu.web.moderation.InMemoryModerationEventStore(),
+                llmSettings(null));
+    }
+
     @Test
     void chatStreamCollectsDeltasAndPersistsTurns() {
         LlmClient client = mock(LlmClient.class);
@@ -45,7 +53,7 @@ class ChatServiceStreamTest {
                 store,
                 llmSettings(client),
                 emptyCompressorProvider(),
-                List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
+                List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), disabledModeration(), Runnable::run);
 
         List<String> deltas = new ArrayList<>();
         String reply = service.chatStream(session, "hi", null, null, null, deltas::add);
@@ -67,7 +75,7 @@ class ChatServiceStreamTest {
                 store,
                 llmSettings(client),
                 emptyCompressorProvider(),
-                List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
+                List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), disabledModeration(), Runnable::run);
 
         try {
             service.chat(session, "hi", null, null, null);
@@ -94,7 +102,7 @@ class ChatServiceStreamTest {
                 store,
                 llmSettings(client),
                 emptyCompressorProvider(),
-                List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
+                List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), disabledModeration(), Runnable::run);
 
         List<String> deltas = new ArrayList<>();
         IllegalStateException thrown = assertThrows(

@@ -56,6 +56,7 @@ public class ChatService {
     private final ObjectProvider<McpConnectionManager> mcpManagers;
     private final ObjectProvider<UserMcpRegistry> userMcpRegistries;
     private final TurnMetrics turnMetrics;
+    private final dev.kualu.web.moderation.ModerationService moderation;
     private final Executor compressExecutor;
 
     @Autowired
@@ -66,9 +67,10 @@ public class ChatService {
             List<AgentTool> tools,
             ObjectProvider<McpConnectionManager> mcpManagers,
             ObjectProvider<UserMcpRegistry> userMcpRegistries,
-            TurnMetrics turnMetrics) {
+            TurnMetrics turnMetrics,
+            dev.kualu.web.moderation.ModerationService moderation) {
         this(sessionStore, llmSettings, compressors, tools, mcpManagers, userMcpRegistries,
-                turnMetrics, newDaemonExecutor());
+                turnMetrics, moderation, newDaemonExecutor());
     }
 
     /** Visible for tests: lets them run compression inline (e.g. {@code Runnable::run}). */
@@ -80,6 +82,7 @@ public class ChatService {
             ObjectProvider<McpConnectionManager> mcpManagers,
             ObjectProvider<UserMcpRegistry> userMcpRegistries,
             TurnMetrics turnMetrics,
+            dev.kualu.web.moderation.ModerationService moderation,
             Executor compressExecutor) {
         this.sessionStore = sessionStore;
         this.llmSettings = llmSettings;
@@ -88,6 +91,7 @@ public class ChatService {
         this.mcpManagers = mcpManagers;
         this.userMcpRegistries = userMcpRegistries;
         this.turnMetrics = turnMetrics;
+        this.moderation = moderation;
         this.compressExecutor = compressExecutor;
     }
 
@@ -145,12 +149,14 @@ public class ChatService {
         LlmClient client = requireLlm(session.owner(), providerId, model);
         // ConversationMemory is not thread-safe; serialize turns per session.
         synchronized (session.memory()) {
+            String effective = gateInput(session, content);
             try {
                 // The tool loop commits the user turn, any tool rounds, and the reply.
-                String reply = toolLoop(session.owner(), client).run(session.memory(), content, images);
+                String reply = toolLoop(session.owner(), client).run(session.memory(), effective, images);
+                String finalReply = moderation.gateOutput(session.memory(), session.owner(), session.id(), reply);
                 persistAppendedQuietly(session);
                 scheduleCompress(session);
-                return reply;
+                return finalReply;
             } catch (LlmException ex) {
                 throw new UpstreamLlmException(ex.getMessage(), ex);
             }
@@ -161,11 +167,28 @@ public class ChatService {
             Consumer<String> onDelta) {
         LlmClient client = requireLlm(session.owner(), providerId, model);
         synchronized (session.memory()) {
+            String effective = gateInput(session, content);
+            // Segments are checked (and masked) before they reach the client; a
+            // BLOCK finding aborts the run with ModerationBlockedException.
+            var gate = moderation.enabled()
+                    ? moderation.segmentGate(onDelta, session.owner(), session.id())
+                    : null;
+            Consumer<String> sink = gate != null ? gate : onDelta;
             try {
-                String reply = toolLoop(session.owner(), client).run(session.memory(), content, images, onDelta);
+                String reply = toolLoop(session.owner(), client).run(session.memory(), effective, images, sink);
+                if (gate != null) {
+                    gate.finish();
+                }
+                String finalReply = moderation.gateOutput(session.memory(), session.owner(), session.id(), reply);
                 persistAppendedQuietly(session);
                 scheduleCompress(session);
-                return reply;
+                return finalReply;
+            } catch (dev.kualu.llm.moderation.ModerationBlockedException ex) {
+                // Segment abort: the tool loop already committed the partial reply,
+                // so replace it with the standard refusal before persisting.
+                moderation.applyOutputBlock(session.memory(), session.owner(), session.id(), ex.hit());
+                persistAppendedQuietly(session);
+                throw ex;
             } catch (RuntimeException ex) {
                 // Mid-stream failure (client disconnect, emitter timeout, upstream cut):
                 // the tool loop has already committed whatever happened, so the turn
@@ -175,6 +198,19 @@ public class ChatService {
                         ? new UpstreamLlmException(llm.getMessage(), llm)
                         : ex;
             }
+        }
+    }
+
+    /**
+     * Input moderation under the session lock. On BLOCK the placeholder turn is
+     * already in the memory; it is persisted before the exception propagates.
+     */
+    private String gateInput(Session session, String content) {
+        try {
+            return moderation.gateInput(session.memory(), session.owner(), session.id(), content);
+        } catch (dev.kualu.llm.moderation.ModerationBlockedException ex) {
+            persistAppendedQuietly(session);
+            throw ex;
         }
     }
 

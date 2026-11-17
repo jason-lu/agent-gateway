@@ -183,4 +183,30 @@ public final class ApiDtos {
 
     public record SseError(String message) {
     }
+
+    /** SSE {@code moderation} event: a finding intercepted the stream. */
+    public record SseModeration(String action, String category, String direction) {
+    }
+
+    /** One audit row for the review queue. The excerpt is masked; the raw text is never stored. */
+    public record ModerationEventResponse(
+            long id,
+            String createdAt,
+            String owner,
+            String sessionId,
+            String direction,
+            String category,
+            String severity,
+            String action,
+            String detector,
+            String excerpt,
+            boolean needsReview,
+            boolean reviewed,
+            String reviewNote,
+            String reviewOverride) {
+    }
+
+    /** Reviewer verdict: {@code override} is {@code CONFIRM} (true positive) or {@code NONE} (false kill). */
+    public record ModerationReviewBody(String note, String override) {
+    }
 }

@@ -28,6 +28,14 @@ class ChatServiceConcurrencyTest {
         return new TurnMetrics(new SimpleMeterRegistry());
     }
 
+    /** Moderation off: this test exercises lock plumbing, not content safety. */
+    private static dev.kualu.web.moderation.ModerationService disabledModeration() {
+        return new dev.kualu.web.moderation.ModerationService(
+                new dev.kualu.web.moderation.ModerationProperties(false, null, null, null),
+                new dev.kualu.web.moderation.InMemoryModerationEventStore(),
+                mock(LlmSettingsService.class));
+    }
+
     @Test
     void parallelChatsOnOneSessionDoNotCorruptHistory() throws Exception {
         LlmClient client = mock(LlmClient.class);
@@ -42,7 +50,7 @@ class ChatServiceConcurrencyTest {
                 store,
                 llmSettings(client),
                 emptyCompressorProvider(),
-                List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), Runnable::run);
+                List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), disabledModeration(), Runnable::run);
 
         int workers = 8;
         CountDownLatch start = new CountDownLatch(1);

@@ -24,14 +24,17 @@ public class Main {
 
     public static void main(String[] args) {
         boolean streaming = true;
+        boolean noModeration = false;
         for (String arg : args) {
             switch (arg) {
                 case "--no-stream", "--full" -> streaming = false;
                 case "--stream" -> streaming = true;
+                case "--no-moderation" -> noModeration = true;
                 case "--help", "-h" -> {
-                    System.out.println("Usage: java dev.kualu.Main [--stream | --no-stream]");
-                    System.out.println("  --stream     Stream replies as they arrive (default)");
-                    System.out.println("  --no-stream  Wait for the full reply before printing");
+                    System.out.println("Usage: java dev.kualu.Main [--stream | --no-stream] [--no-moderation]");
+                    System.out.println("  --stream          Stream replies as they arrive (default)");
+                    System.out.println("  --no-stream       Wait for the full reply before printing");
+                    System.out.println("  --no-moderation   Disable content moderation (debug only)");
                     return;
                 }
                 default -> {
@@ -43,6 +46,10 @@ public class Main {
 
         LlmClient client = LlmClient.fromEnvironment();
         MemoryCompressor compressor = memoryCompressor(client);
+        var moderator = noModeration ? null : contentModerator(client);
+        if (noModeration) {
+            log.warn("content moderation disabled by --no-moderation: nothing filters input or output");
+        }
         BufferedReader in = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
         McpConnectionManager mcp = mcpManager();
         List<AgentTool> staticTools = execTools();
@@ -51,10 +58,37 @@ public class Main {
                 List<AgentTool> all = new ArrayList<>(staticTools);
                 all.addAll(mcp.tools());
                 return all;
-            }).run();
+            }, moderator).run();
         } finally {
             mcp.close();
         }
+    }
+
+    /**
+     * Content moderation from {@code AGENT_MODERATION_*}. Off by default on the
+     * console (the web gateway defaults on); the lexicon is the shared skeleton
+     * at {@code classpath:moderation/lexicon.json} unless a path is configured.
+     */
+    static dev.kualu.llm.moderation.ContentModerator contentModerator(LlmClient client) {
+        if (!Boolean.parseBoolean(envOr("AGENT_MODERATION_ENABLED", "false"))) {
+            return null;
+        }
+        boolean flagMode = "flag".equalsIgnoreCase(envOr("AGENT_MODERATION_MODE", "block"));
+        var policy = new dev.kualu.llm.moderation.ModerationPolicy(
+                flagMode ? dev.kualu.llm.moderation.Mode.FLAG : dev.kualu.llm.moderation.Mode.BLOCK);
+        String lexiconPath = envOr("AGENT_MODERATION_LEXICON_PATH", "classpath:moderation/lexicon.json");
+        var lexicon = new dev.kualu.llm.moderation.LexiconModerator(policy, lexiconPath);
+        dev.kualu.llm.moderation.LlmModerator classifier = null;
+        if (Boolean.parseBoolean(envOr("AGENT_MODERATION_LLM_ENABLED", "true"))) {
+            classifier = new dev.kualu.llm.moderation.LlmModerator(
+                    () -> client,
+                    Duration.ofMillis(Long.parseLong(envOr("AGENT_MODERATION_LLM_TIMEOUT_MS", "800"))),
+                    0.7,
+                    policy);
+        }
+        log.info("moderation configured: mode={}, lexicon={}, llm={}",
+                flagMode ? "flag" : "block", lexiconPath, classifier != null);
+        return new dev.kualu.llm.moderation.ContentModerator(lexicon, classifier, policy);
     }
 
     /** Builds the MCP manager from {@code AGENT_MCP_*} and the {@code mcp.json} file. */
