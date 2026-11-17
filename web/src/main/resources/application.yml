@@ -55,6 +55,12 @@ agent:
     instruction: ${AGENT_MEMORY_INSTRUCTION:}
     summary-provider: ${AGENT_MEMORY_SUMMARY_PROVIDER:}
     summary-model: ${AGENT_MEMORY_SUMMARY_MODEL:}
+    # Semantic (cross-session) memory: facts, preferences, profile fields.
+    # The hard-identifier gate is mandatory whenever this is enabled.
+    # See docs/compose/spec/semantic-memory.md.
+    semantic:
+      enabled: ${AGENT_MEMORY_SEMANTIC_ENABLED:true}
+      max-inject: ${AGENT_MEMORY_SEMANTIC_MAX_INJECT:8}
   moderation:
     # Content moderation: lexicon fast path + LLM classifier + review queue.
     # mode=flag is the gray-release mode (audit only, nothing intercepted);

@@ -70,6 +70,7 @@ public final class ToolLoop {
 
     private final LlmClient client;
     private final Supplier<List<AgentTool>> tools;
+    private final Supplier<List<ChatMessage>> requestPreamble;
     private final int maxRounds;
 
     public ToolLoop(LlmClient client, List<AgentTool> tools) {
@@ -90,8 +91,25 @@ public final class ToolLoop {
 
     /** @param tools supplies the tool list; evaluated once per {@code run} */
     public ToolLoop(LlmClient client, Supplier<List<AgentTool>> tools, int maxRounds) {
+        this(client, tools, () -> List.of(), maxRounds);
+    }
+
+    /**
+     * @param requestPreamble request-only system messages inserted after the tool
+     *                        policy and before the conversation (e.g. the
+     *                        {@code 【用户记忆】} block); evaluated once per
+     *                        {@code run}, never stored in the memory
+     */
+    public ToolLoop(LlmClient client, Supplier<List<AgentTool>> tools,
+            Supplier<List<ChatMessage>> requestPreamble) {
+        this(client, tools, requestPreamble, DEFAULT_MAX_ROUNDS);
+    }
+
+    public ToolLoop(LlmClient client, Supplier<List<AgentTool>> tools,
+            Supplier<List<ChatMessage>> requestPreamble, int maxRounds) {
         this.client = Objects.requireNonNull(client, "client");
         this.tools = Objects.requireNonNull(tools, "tools");
+        this.requestPreamble = Objects.requireNonNull(requestPreamble, "requestPreamble");
         if (maxRounds < 1) {
             throw new IllegalArgumentException("maxRounds must be >= 1 (got " + maxRounds + ")");
         }
@@ -150,10 +168,18 @@ public final class ToolLoop {
         ToolSet toolSet = snapshot();
 
         List<ChatMessage> payload = new ArrayList<>(memory.context());
+        int insertAt = 0;
         if (!toolSet.specs().isEmpty()) {
             // The policy leads the request whenever tools are on offer. It is
             // request-only — never stored, so history and folding are untouched.
             payload.add(0, ChatMessage.system(TOOL_POLICY));
+            insertAt = 1;
+        }
+        List<ChatMessage> preamble = requestPreamble.get();
+        if (preamble != null && !preamble.isEmpty()) {
+            // Request-only extras (e.g. the memory block) follow the policy and
+            // lead the conversation; like the policy they never enter memory.
+            payload.addAll(insertAt, preamble);
         }
         payload.add(userTurn);
         List<ChatMessage> turns = new ArrayList<>();

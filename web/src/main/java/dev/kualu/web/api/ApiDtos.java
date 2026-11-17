@@ -209,4 +209,25 @@ public final class ApiDtos {
     /** Reviewer verdict: {@code override} is {@code CONFIRM} (true positive) or {@code NONE} (false kill). */
     public record ModerationReviewBody(String note, String override) {
     }
+
+    /** The whitelisted personal archive; null fields are absent. */
+    public record ProfileResponse(String nickname, String gender, String city) {
+    }
+
+    /** Profile write (PUT semantics: null clears the field). */
+    public record ProfileBody(String nickname, String gender, String city) {
+    }
+
+    /** One semantic-memory entry. */
+    public record MemoryEntryResponse(String id, String kind, String content, String source,
+                                      String sourceSessionId, String createdAt, String updatedAt) {
+    }
+
+    /** The memory panel payload: profile plus every active entry. */
+    public record MemoryListResponse(ProfileResponse profile, List<MemoryEntryResponse> entries) {
+    }
+
+    /** Entry edit: content only (kind and source are immutable). */
+    public record MemoryUpdateBody(String content) {
+    }
 }

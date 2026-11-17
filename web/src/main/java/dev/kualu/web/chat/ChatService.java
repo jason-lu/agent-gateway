@@ -11,6 +11,7 @@ import dev.kualu.web.api.ApiDtos.HistoryMessage;
 import dev.kualu.web.api.ApiDtos.RawMessage;
 import dev.kualu.web.api.ApiDtos.RawToolCall;
 import dev.kualu.web.llm.LlmSettingsService;
+import dev.kualu.web.memory.SemanticMemory;
 import dev.kualu.web.mcp.UserMcpRegistry;
 import dev.kualu.web.metrics.TurnMetrics;
 import dev.kualu.web.session.ImageRef;
@@ -57,6 +58,7 @@ public class ChatService {
     private final ObjectProvider<UserMcpRegistry> userMcpRegistries;
     private final TurnMetrics turnMetrics;
     private final dev.kualu.web.moderation.ModerationService moderation;
+    private final SemanticMemory semanticMemory;
     private final Executor compressExecutor;
 
     @Autowired
@@ -68,9 +70,25 @@ public class ChatService {
             ObjectProvider<McpConnectionManager> mcpManagers,
             ObjectProvider<UserMcpRegistry> userMcpRegistries,
             TurnMetrics turnMetrics,
-            dev.kualu.web.moderation.ModerationService moderation) {
+            dev.kualu.web.moderation.ModerationService moderation,
+            SemanticMemory semanticMemory) {
         this(sessionStore, llmSettings, compressors, tools, mcpManagers, userMcpRegistries,
-                turnMetrics, moderation, newDaemonExecutor());
+                turnMetrics, moderation, newDaemonExecutor(), semanticMemory);
+    }
+
+    /** Visible for tests: semantic memory off (keeps older call sites compiling). */
+    ChatService(
+            SessionStore sessionStore,
+            LlmSettingsService llmSettings,
+            ObjectProvider<MemoryCompressor> compressors,
+            List<AgentTool> tools,
+            ObjectProvider<McpConnectionManager> mcpManagers,
+            ObjectProvider<UserMcpRegistry> userMcpRegistries,
+            TurnMetrics turnMetrics,
+            dev.kualu.web.moderation.ModerationService moderation,
+            Executor compressExecutor) {
+        this(sessionStore, llmSettings, compressors, tools, mcpManagers, userMcpRegistries,
+                turnMetrics, moderation, compressExecutor, SemanticMemory.disabled());
     }
 
     /** Visible for tests: lets them run compression inline (e.g. {@code Runnable::run}). */
@@ -83,7 +101,8 @@ public class ChatService {
             ObjectProvider<UserMcpRegistry> userMcpRegistries,
             TurnMetrics turnMetrics,
             dev.kualu.web.moderation.ModerationService moderation,
-            Executor compressExecutor) {
+            Executor compressExecutor,
+            SemanticMemory semanticMemory) {
         this.sessionStore = sessionStore;
         this.llmSettings = llmSettings;
         this.compressor = compressors.getIfAvailable();
@@ -93,6 +112,7 @@ public class ChatService {
         this.turnMetrics = turnMetrics;
         this.moderation = moderation;
         this.compressExecutor = compressExecutor;
+        this.semanticMemory = semanticMemory;
     }
 
     private static ExecutorService newDaemonExecutor() {
@@ -113,10 +133,12 @@ public class ChatService {
     /**
      * One turn's tool view: static beans (exec), the owner's own MCP tools, and the
      * shared {@code mcp.json} tools — minus any shared server the owner redefines
-     * under the same name. Re-read every turn so tools can come and go.
+     * under the same name. The owner's semantic-memory tools ride along when the
+     * feature is on. Re-read every turn so tools can come and go.
      */
     private List<AgentTool> toolsFor(String owner) {
         List<AgentTool> all = new ArrayList<>(staticTools);
+        all.addAll(semanticMemory.toolsFor(owner));
         Set<String> overridden = Set.of();
         UserMcpRegistry registry = userMcpRegistries.getIfAvailable();
         if (registry != null) {
@@ -131,9 +153,14 @@ public class ChatService {
         return all;
     }
 
-    /** Per-turn loop: the tool list is re-read from the owner's MCP managers on run(). */
-    private ToolLoop toolLoop(String owner, LlmClient client) {
-        return new ToolLoop(client, () -> toolsFor(owner));
+    /**
+     * Per-turn loop: the tool list is re-read from the owner's MCP managers on
+     * run(), and the semantic-memory preamble (policy + {@code 【用户记忆】} block)
+     * is rebuilt per request — request-only, never stored.
+     */
+    private ToolLoop toolLoop(String owner, LlmClient client, String userContent) {
+        return new ToolLoop(client, () -> toolsFor(owner),
+                () -> semanticMemory.preamble(owner, userContent));
     }
 
     public boolean isLlmConfigured() {
@@ -152,7 +179,7 @@ public class ChatService {
             String effective = gateInput(session, content);
             try {
                 // The tool loop commits the user turn, any tool rounds, and the reply.
-                String reply = toolLoop(session.owner(), client).run(session.memory(), effective, images);
+                String reply = toolLoop(session.owner(), client, effective).run(session.memory(), effective, images);
                 String finalReply = moderation.gateOutput(session.memory(), session.owner(), session.id(), reply);
                 persistAppendedQuietly(session);
                 scheduleCompress(session);
@@ -175,7 +202,7 @@ public class ChatService {
                     : null;
             Consumer<String> sink = gate != null ? gate : onDelta;
             try {
-                String reply = toolLoop(session.owner(), client).run(session.memory(), effective, images, sink);
+                String reply = toolLoop(session.owner(), client, effective).run(session.memory(), effective, images, sink);
                 if (gate != null) {
                     gate.finish();
                 }

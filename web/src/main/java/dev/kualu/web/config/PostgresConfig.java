@@ -135,6 +135,11 @@ public class PostgresConfig {
         return new dev.kualu.web.moderation.PostgresModerationEventStore(jdbc);
     }
 
+    @Bean
+    public dev.kualu.web.memory.MemoryStore memoryStore(JdbcTemplate jdbc) {
+        return new dev.kualu.web.memory.PostgresMemoryStore(jdbc);
+    }
+
     /**
      * The database is often reachable over the public internet, so the URL must select a
      * TLS mode that cannot silently fall back to plaintext password auth. A deny-list is

@@ -85,6 +85,21 @@ class ToolLoopTest {
             return turn;
         }
 
+        /** Tool-less turns go through chat() rather than complete(). */
+        @Override
+        public String chat(List<ChatMessage> messages) {
+            return next(messages).content();
+        }
+
+        @Override
+        public String chatStream(List<ChatMessage> messages, Consumer<String> onDelta) {
+            AssistantTurn turn = next(messages);
+            if (!turn.content().isEmpty()) {
+                onDelta.accept(turn.content());
+            }
+            return turn.content();
+        }
+
         private AssistantTurn next(List<ChatMessage> messages) {
             requests.add(List.copyOf(messages));
             RuntimeException failure = failures.poll();

@@ -141,6 +141,20 @@ public class AppConfig {
     }
 
     @Bean
+    @ConditionalOnProperty(name = "agent.store", havingValue = "memory")
+    public dev.kualu.web.memory.MemoryStore inMemoryMemoryStore() {
+        return new dev.kualu.web.memory.InMemoryMemoryStore();
+    }
+
+    @Bean
+    public dev.kualu.web.memory.SemanticMemory semanticMemory(
+            dev.kualu.web.memory.MemoryStore store, SemanticMemoryProperties properties) {
+        log.info("semantic-memory configured: enabled={}, max-inject={}",
+                properties.enabled(), properties.maxInject());
+        return new dev.kualu.web.memory.SemanticMemory(store, properties.maxInject(), properties.enabled());
+    }
+
+    @Bean
     public dev.kualu.web.email.EmailService emailService(dev.kualu.web.email.EmailSettingsStore store) {
         return new dev.kualu.web.email.EmailService(store);
     }
