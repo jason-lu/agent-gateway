@@ -55,6 +55,13 @@ public class SessionController {
     /** Per-image cap in characters (base64 data URIs included); ~18 MB of binary. */
     private static final int MAX_IMAGE_CHARS = 25_000_000;
 
+    /**
+     * Per-message text cap. Long pastes inflate the prompt (slower first token)
+     * and crowd the context window; over-limit input is refused with a split hint
+     * rather than silently truncated.
+     */
+    private static final int MAX_CONTENT_CHARS = 8_000;
+
     private final SessionStore sessionStore;
     private final ChatService chatService;
     private final TurnMetrics turnMetrics;
@@ -281,6 +288,11 @@ public class SessionController {
     private static void validate(MessageBody body) {
         if (body.content().isBlank() && body.images().isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "content and images must not both be empty");
+        }
+        if (body.content().length() > MAX_CONTENT_CHARS) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "输入过长（" + body.content().length() + " 字符），请分段发送（单次上限 "
+                            + MAX_CONTENT_CHARS + " 字符）");
         }
         if (body.images().isEmpty()) {
             return;
