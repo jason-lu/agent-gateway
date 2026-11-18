@@ -150,8 +150,16 @@ public class ModerationService {
      * Segment gate for a streamed reply: L1 per sentence before forwarding.
      * Findings are audited through {@code onFinding}; a BLOCK finding aborts the
      * stream with {@link ModerationBlockedException}.
+     *
+     * <p>Returns {@code null} in gray-release (flag) mode: nothing is intercepted
+     * there, so holding deltas back would only chop the stream. Audit stays intact
+     * through the full pre-persist check ({@link #gateOutput}), which records the
+     * same findings on the complete reply.
      */
     public SegmentGate segmentGate(Consumer<String> sink, String owner, String sessionId) {
+        if (policy.mode() == Mode.FLAG) {
+            return null;
+        }
         Consumer<ModerationHit> onFinding = hit -> record(owner, sessionId, Direction.OUTPUT, hit, null);
         return new SegmentGate(moderator, sink, onFinding);
     }

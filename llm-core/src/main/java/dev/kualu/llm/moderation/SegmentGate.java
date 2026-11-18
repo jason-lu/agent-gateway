@@ -1,5 +1,6 @@
 package dev.kualu.llm.moderation;
 
+import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Consumer;
@@ -11,18 +12,24 @@ import java.util.function.Consumer;
  * <p>Deltas accumulate until a sentence boundary (。！？；…!?.; or newline); the
  * completed segment is checked and only then forwarded — masked when the finding
  * is REDACT, never at all when it is BLOCK ({@link ModerationBlockedException}
- * aborts the run). The un-terminated tail waits for {@link #finish()}. What the
- * segment gate passes can still be caught by the full pre-persist check (L2
- * semantics, cross-segment terms) — that later hit replaces the stored reply.
+ * aborts the run). An un-terminated tail is held at most {@link #DEFAULT_MAX_HOLD}
+ * (then checked and forwarded whole) and otherwise waits for {@link #finish()}.
+ * What the segment gate passes can still be caught by the full pre-persist check
+ * (L2 semantics, cross-segment terms) — that later hit replaces the stored reply.
  */
 public final class SegmentGate implements Consumer<String> {
 
     private static final String BOUNDARIES = "。！？；…!?.;\n";
 
+    /** How long a tail may wait for a boundary before it is forwarded anyway. */
+    public static final Duration DEFAULT_MAX_HOLD = Duration.ofMillis(150);
+
     private final ContentModerator moderator;
     private final Consumer<String> sink;
     private final Consumer<ModerationHit> onFinding;
+    private final long maxHoldNanos;
     private final StringBuilder buffer = new StringBuilder();
+    private long lastForwardNanos = System.nanoTime();
     private boolean aborted;
 
     public SegmentGate(ContentModerator moderator, Consumer<String> sink) {
@@ -35,9 +42,16 @@ public final class SegmentGate implements Consumer<String> {
      *                  segment is forwarded, BLOCK before the abort) — the audit hook
      */
     public SegmentGate(ContentModerator moderator, Consumer<String> sink, Consumer<ModerationHit> onFinding) {
+        this(moderator, sink, onFinding, DEFAULT_MAX_HOLD);
+    }
+
+    /** Package-private for tests: {@code maxHold} bounds how long a tail waits for a boundary. */
+    SegmentGate(ContentModerator moderator, Consumer<String> sink, Consumer<ModerationHit> onFinding,
+            Duration maxHold) {
         this.moderator = Objects.requireNonNull(moderator, "moderator");
         this.sink = Objects.requireNonNull(sink, "sink");
         this.onFinding = Objects.requireNonNull(onFinding, "onFinding");
+        this.maxHoldNanos = Objects.requireNonNull(maxHold, "maxHold").toNanos();
     }
 
     @Override
@@ -47,6 +61,13 @@ public final class SegmentGate implements Consumer<String> {
         }
         buffer.append(delta);
         pump(false);
+        // Forced flush: streaming must not stall waiting for a sentence end. The
+        // check runs on arrival, so the real hold is maxHold plus the upstream
+        // inter-delta gap. checkSegment is lexicon-only (L1), so an extra flush
+        // costs nothing; terms split across a forced cut fall through to L2.
+        if (!buffer.isEmpty() && System.nanoTime() - lastForwardNanos >= maxHoldNanos) {
+            pump(true);
+        }
     }
 
     /** Flushes the unterminated tail at end of stream (same checks as completed segments). */
@@ -77,6 +98,7 @@ public final class SegmentGate implements Consumer<String> {
                     ? moderator.redact(segment, hit.get())
                     : segment;
             sink.accept(out);
+            lastForwardNanos = System.nanoTime();
         }
     }
 

@@ -5,8 +5,10 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -30,10 +32,16 @@ class SegmentGateTest {
         return new ContentModerator(lexicon, null, new ModerationPolicy(Mode.BLOCK));
     }
 
+    /** A gate that never force-flushes: tests assert boundary behavior on a stable clock. */
+    private static SegmentGate holdingGate(ContentModerator moderator, Consumer<String> sink) {
+        return new SegmentGate(moderator, sink, hit -> {
+        }, Duration.ofDays(1));
+    }
+
     @Test
     void cleanStreamForwardsAtSentenceBoundaries() throws IOException {
         List<String> out = new ArrayList<>();
-        SegmentGate gate = new SegmentGate(moderator(), out::add);
+        SegmentGate gate = holdingGate(moderator(), out::add);
         gate.accept("第一句");
         assertTrue(out.isEmpty()); // held back until the boundary
         gate.accept("。第二句！");
@@ -41,6 +49,25 @@ class SegmentGateTest {
         gate.finish();
         assertEquals(List.of("第一句。", "第二句！"), out.subList(0, 2));
         assertEquals("第一句。第二句！尾巴", String.join("", out));
+    }
+
+    @Test
+    void forceFlushesTailWhenHoldExceeded() throws IOException {
+        List<String> out = new ArrayList<>();
+        SegmentGate gate = new SegmentGate(moderator(), out::add, hit -> {
+        }, Duration.ZERO);
+        gate.accept("还没有句号");
+        assertEquals(List.of("还没有句号"), out); // forwarded without waiting for a boundary
+    }
+
+    @Test
+    void tailIsHeldWithinTheHoldWindow() throws IOException {
+        List<String> out = new ArrayList<>();
+        SegmentGate gate = holdingGate(moderator(), out::add);
+        gate.accept("滞留中的尾巴");
+        assertTrue(out.isEmpty());
+        gate.finish();
+        assertEquals(List.of("滞留中的尾巴"), out);
     }
 
     @Test

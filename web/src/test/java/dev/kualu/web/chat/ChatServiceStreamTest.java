@@ -36,6 +36,19 @@ class ChatServiceStreamTest {
                 llmSettings(null));
     }
 
+    /** Moderation on in gray-release (flag): audited, but nothing is intercepted. */
+    private static dev.kualu.web.moderation.ModerationService flagModeration() throws Exception {
+        java.nio.file.Path lexicon = java.nio.file.Files.createTempFile("lexicon", ".json");
+        java.nio.file.Files.writeString(lexicon, """
+                {"categories": {"ABUSE": {"severity": "LOW", "terms": [{"pattern": "脏话示例", "type": "exact"}]}}}
+                """);
+        return new dev.kualu.web.moderation.ModerationService(
+                new dev.kualu.web.moderation.ModerationProperties(true, "flag", lexicon.toString(),
+                        new dev.kualu.web.moderation.ModerationProperties.Llm(false, null, null, 0)),
+                new dev.kualu.web.moderation.InMemoryModerationEventStore(),
+                llmSettings(null));
+    }
+
     @Test
     void chatStreamCollectsDeltasAndPersistsTurns() {
         LlmClient client = mock(LlmClient.class);
@@ -62,6 +75,33 @@ class ChatServiceStreamTest {
         assertEquals(List.of("Hel", "lo"), deltas);
         assertEquals(2, session.messageCount());
         assertEquals(2, store.find("ada", session.id()).orElseThrow().messageCount());
+    }
+
+    @Test
+    void flagModeModerationForwardsDeltasUnbatched() throws Exception {
+        // Gray-release mode must not batch deltas into sentence segments: the
+        // segment gate is skipped there, so each delta reaches the client as-is.
+        LlmClient client = mock(LlmClient.class);
+        when(client.chatStream(anyList(), any())).thenAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            var onDelta = (java.util.function.Consumer<String>) invocation.getArgument(1);
+            onDelta.accept("第一句还没结束");
+            onDelta.accept("。第二句！");
+            return "第一句还没结束。第二句！";
+        });
+
+        InMemorySessionStore store = new InMemorySessionStore();
+        Session session = store.create("ada", null);
+        ChatService service = new ChatService(
+                store,
+                llmSettings(client),
+                emptyCompressorProvider(),
+                List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), flagModeration(), Runnable::run);
+
+        List<String> deltas = new ArrayList<>();
+        service.chatStream(session, "hi", null, null, null, deltas::add);
+
+        assertEquals(List.of("第一句还没结束", "。第二句！"), deltas);
     }
 
     @Test
