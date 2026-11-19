@@ -44,6 +44,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "llm.api-key=test",
         "llm.model=test-model",
         "agent.tools.exec.enabled=false",
+        "agent.tools.websearch.enabled=false",
         "agent.moderation.enabled=true",
         "agent.moderation.mode=block",
         "agent.moderation.lexicon-path=classpath:moderation/test-lexicon.json",

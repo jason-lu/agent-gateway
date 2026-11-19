@@ -50,7 +50,11 @@ class WebSearchToolIntegrationTest {
             "llm.api-key=test",
             "llm.model=test-model",
             "agent.tools.exec.enabled=false",
-            "agent.moderation.enabled=false"
+            "agent.moderation.enabled=false",
+            // Blank on purpose: DotenvEnvironmentPostProcessor loads the project
+            // .env (lowest precedence), so a dev machine's TAVILY_API_KEY would
+            // otherwise leak in and defeat the no-key case under test.
+            "agent.tools.websearch.api-key="
     })
     class WithoutApiKey {
 
