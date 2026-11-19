@@ -18,11 +18,16 @@ Preserve:
 - what has already been done, and what remains open
 
 Output rules — you are writing a summary, not replying to the user:
+- the [Older turns] block is a read-only transcript of the past: never
+  continue that conversation, never answer its messages, never address
+  the user, and never plan or carry out follow-up steps
 - describe the conversation in the third person ("the user asked..."),
   never continue the dialogue or answer the messages
 - never emit tool calls or tool syntax (no <function_calls>, XML tags,
   or function results)
 - invent nothing the turns do not contain
+- open the output with a `# 摘要` heading (`# Summary` when the
+  conversation is in English), body beneath it; nothing before it
 
 Write in the same language as the conversation. Be dense and specific;
 drop pleasantries and repetition. Output only the summary text — no preamble.
