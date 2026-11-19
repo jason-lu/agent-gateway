@@ -26,6 +26,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -76,6 +77,15 @@ class PostgresPersistenceIntegrationTest {
                 .migrate();
     }
 
+    /**
+     * Reads through a brand-new store so assertions see the database, not the
+     * live Session object find() hands out for the lifetime of the process.
+     */
+    private static Session reloadFromDb(String owner, String id) {
+        return new PostgresSessionStore(jdbc, new ChatMessageCodec(new ObjectMapper()))
+                .find(owner, id).orElseThrow();
+    }
+
     // ---- users ----------------------------------------------------------
 
     @Test
@@ -120,7 +130,7 @@ class PostgresPersistenceIntegrationTest {
         created.memory().addUser("hi").addAssistant("hello");
         store.appendMessages(created);
 
-        Session found = store.find("ada", created.id()).orElseThrow();
+        Session found = reloadFromDb("ada", created.id());
         assertEquals(created.id(), found.id());
         assertEquals("ada", found.owner());
         assertEquals(3, found.messageCount());
@@ -129,6 +139,17 @@ class PostgresPersistenceIntegrationTest {
         assertEquals(1, store.listByOwner("ada").size());
         assertTrue(store.delete("ada", created.id()));
         assertFalse(store.find("ada", created.id()).isPresent());
+    }
+
+    @Test
+    void find_returnsOneLiveSessionSoConcurrentTurnsShareOneLock() {
+        Session created = store.create("ada", null);
+
+        Session first = store.find("ada", created.id()).orElseThrow();
+        Session second = store.find("ada", created.id()).orElseThrow();
+
+        assertSame(created, first, "turns and the memory-compress fold must lock the same object");
+        assertSame(first, second);
     }
 
     @Test
@@ -189,7 +210,7 @@ class PostgresPersistenceIntegrationTest {
                 ChatMessage.assistant("sure")));
         store.replaceMessages(created);
 
-        Session reloaded = store.find("ada", created.id()).orElseThrow();
+        Session reloaded = reloadFromDb("ada", created.id());
         assertEquals(4, reloaded.messageCount());
         assertEquals("sys", reloaded.memory().messages().get(0).content());
         assertEquals(SUMMARY, reloaded.memory().messages().get(1).content());
@@ -208,7 +229,7 @@ class PostgresPersistenceIntegrationTest {
         assertTrue(json.contains("ref:" + created.id() + "/"), json);
         assertFalse(json.contains("AAAA"), "pixels must not live in the row: " + json);
 
-        Session reloaded = store.find("ada", created.id()).orElseThrow();
+        Session reloaded = reloadFromDb("ada", created.id());
         String ref = reloaded.memory().messages().get(0).images().get(0);
         assertTrue(ImageRef.isRef(ref), ref);
         assertEquals("data:image/png;base64,AAAA",
@@ -239,7 +260,7 @@ class PostgresPersistenceIntegrationTest {
         created.memory().addAssistant("sure");
         store.appendMessages(created);
 
-        Session reloaded = store.find("ada", created.id()).orElseThrow();
+        Session reloaded = reloadFromDb("ada", created.id());
         assertEquals("help me with the parser", reloaded.title(), "the title is fill-once");
 
         var summaries = store.listByOwner("ada");
@@ -292,7 +313,7 @@ class PostgresPersistenceIntegrationTest {
                 ChatMessage.tool("file1\nfile2", "call_abc")));
         store.replaceMessages(created);
 
-        Session reloaded = store.find("ada", created.id()).orElseThrow();
+        Session reloaded = reloadFromDb("ada", created.id());
         List<ChatMessage> messages = reloaded.memory().messages();
         assertEquals(3, messages.size());
         assertEquals("call_abc", messages.get(1).toolCalls().get(0).id());

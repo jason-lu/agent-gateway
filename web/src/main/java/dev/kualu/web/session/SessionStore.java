@@ -11,6 +11,14 @@ public interface SessionStore {
 
     Session create(String owner, String systemPrompt);
 
+    /**
+     * The process-canonical {@link Session} for {@code sessionId}, scoped to
+     * {@code owner} (another owner's session reads as empty). Implementations
+     * must return the same instance for the lifetime of the session — callers
+     * serialize turns with {@code synchronized (session.memory())}, which only
+     * works when everyone shares one memory object. Reads of stored rows happen
+     * at first access; later calls reflect the live turns, not a re-read.
+     */
     Optional<Session> find(String owner, String sessionId);
 
     List<SessionSummary> listByOwner(String owner);

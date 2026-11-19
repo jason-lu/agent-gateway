@@ -17,8 +17,10 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * {@link SessionStore} backed by {@code agent.sessions} + {@code agent.session_messages}.
@@ -37,12 +39,23 @@ import java.util.UUID;
  * <p>SQL fetch and row decode are timed separately (see {@link TurnTimings}) so
  * payload-size-driven costs are visible per request; raw rows are read first and
  * decoded after the statement returns.
+ *
+ * <p>{@link #find} hands out one live {@link Session} per id for the lifetime of
+ * the process (like {@link InMemorySessionStore}): concurrent requests must share
+ * one {@link dev.kualu.llm.memory.ConversationMemory}, or the
+ * {@code synchronized (session.memory())} around turns locks different objects and
+ * a slow memory-compress rewrite can wipe turns a parallel request just appended.
+ * The database stays the durability layer; the map is identity, not a cache of
+ * rows, so external row edits are not picked up by a live session.
  */
 public class PostgresSessionStore implements SessionStore {
 
     private final JdbcTemplate jdbc;
     private final ChatMessageCodec codec;
     private final TransactionTemplate tx;
+
+    /** Live sessions by id — see the class javadoc on why find() must not return fresh copies. */
+    private final Map<String, Session> live = new ConcurrentHashMap<>();
 
     public PostgresSessionStore(JdbcTemplate jdbc, ChatMessageCodec codec) {
         this.jdbc = jdbc;
@@ -72,14 +85,20 @@ public class PostgresSessionStore implements SessionStore {
         if (systemPrompt != null && !systemPrompt.isBlank()) {
             messages.add(ChatMessage.system(systemPrompt));
         }
+        Session session = new Session(id, owner, createdAt, null, new ConversationMemory().replaceAll(messages));
+        live.put(id, session);
         if (!messages.isEmpty()) {
             insertRows(id, owner, messages, 0, null);
         }
-        return new Session(id, owner, createdAt, null, new ConversationMemory().replaceAll(messages));
+        return session;
     }
 
     @Override
     public Optional<Session> find(String owner, String sessionId) {
+        Session shared = live.get(sessionId);
+        if (shared != null) {
+            return shared.owner().equals(owner) ? Optional.of(shared) : Optional.empty();
+        }
         long sqlStart = System.nanoTime();
         List<RawSession> rows = jdbc.query(
                 "select id, owner, created_at, title from agent.sessions where id = ?::uuid and owner = ?",
@@ -111,10 +130,14 @@ public class PostgresSessionStore implements SessionStore {
                     message.toolCalls(), message.images())));
             chars += message.content().length();
         }
-        Session session = new Session(raw.id(), raw.owner(), raw.createdAt(), raw.title(),
+        Session loaded = new Session(raw.id(), raw.owner(), raw.createdAt(), raw.title(),
                 new ConversationMemory().replaceAll(decoded));
-        TurnTimings.recordLoad(sqlMs, elapsedMs(decodeStart), chars, session.messageCount());
-        return Optional.of(session);
+        Session winner = live.putIfAbsent(sessionId, loaded);
+        if (winner != null) {
+            loaded = winner;
+        }
+        TurnTimings.recordLoad(sqlMs, elapsedMs(decodeStart), chars, loaded.messageCount());
+        return Optional.of(loaded);
     }
 
     @Override
@@ -142,6 +165,7 @@ public class PostgresSessionStore implements SessionStore {
         // session_messages hangs off a cascade; images are cleaned up explicitly.
         if (jdbc.update("delete from agent.sessions where id = ?::uuid and owner = ?", sessionId, owner) > 0) {
             jdbc.update("delete from agent.session_images where session_id = ?::uuid", sessionId);
+            live.remove(sessionId);
             return true;
         }
         return false;
