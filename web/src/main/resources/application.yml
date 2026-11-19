@@ -1,5 +1,9 @@
 server:
   port: ${SERVER_PORT:8080}
+  # Bind all interfaces on purpose: nginx runs in Docker on the server and
+  # reaches this port via 172.19.159.219 / host.docker.internal, never loopback.
+  # Keep 8080 off the public internet at the security-group/firewall level.
+  address: ${SERVER_ADDRESS:0.0.0.0}
 
 spring:
   application:
@@ -84,6 +88,16 @@ agent:
       timeout-seconds: ${AGENT_EXEC_TIMEOUT:60}
       output-limit: ${AGENT_EXEC_OUTPUT_LIMIT:8000}
       workdir: ${AGENT_EXEC_WORKDIR:}
+    websearch:
+      # Web search through the Tavily API (the model's web_search tool). The tool
+      # is registered only when enabled AND an API key is present.
+      enabled: ${AGENT_WEBSEARCH_ENABLED:true}
+      api-key: ${TAVILY_API_KEY:}
+      base-url: ${AGENT_WEBSEARCH_BASE_URL:https://api.tavily.com}
+      max-results: ${AGENT_WEBSEARCH_MAX_RESULTS:5}
+      output-limit: ${AGENT_WEBSEARCH_OUTPUT_LIMIT:8000}
+      timeout-seconds: ${AGENT_WEBSEARCH_TIMEOUT:30}
+      include-answer: ${AGENT_WEBSEARCH_INCLUDE_ANSWER:true}
     mcp:
       # MCP client: servers come from mcp.json (primary) plus the inline override list.
       enabled: ${AGENT_MCP_ENABLED:true}
@@ -134,3 +148,18 @@ management:
 logging:
   level:
     root: INFO
+  # Rotated JSON-lines file for Aliyun SLS Logtail collection; console stays
+  # human-readable for journalctl. See agent/ops/sls-logtail-collection.json.
+  file:
+    name: ${LOG_DIR:logs}/agent-web.log
+  structured:
+    format:
+      file: logstash
+  logback:
+    rollingpolicy:
+      # No .gz: Logtail tails the active file and follows the rename on
+      # rotation; compression would drop anything it has not read yet.
+      file-name-pattern: ${LOG_DIR:logs}/agent-web.%d{yyyy-MM-dd}.%i.log
+      max-file-size: 100MB
+      max-history: 14
+      total-size-cap: 2GB

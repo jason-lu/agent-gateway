@@ -59,6 +59,11 @@ Every user picks a concrete model in the chat window (`GET /api/v1/llm/models` l
 | MCP call timeout | `AGENT_MCP_TIMEOUT` | — | `agent.tools.mcp.default-timeout-seconds` (default `60`) |
 | MCP output limit | `AGENT_MCP_OUTPUT_LIMIT` | — | `agent.tools.mcp.output-limit` (default `8000`) |
 | MCP tool refresh | `AGENT_MCP_REFRESH` | — | `agent.tools.mcp.refresh-seconds` (default `300`, `0` disables) |
+| Web search tool | `AGENT_WEBSEARCH_ENABLED` | — | `agent.tools.websearch.enabled` (default `true`; registered only when an API key is present) |
+| Web search API key | `TAVILY_API_KEY` | — | `agent.tools.websearch.api-key` (no default — get one at tavily.com) |
+| Web search max results | `AGENT_WEBSEARCH_MAX_RESULTS` | — | `agent.tools.websearch.max-results` (default `5`) |
+| Web search output limit | `AGENT_WEBSEARCH_OUTPUT_LIMIT` | — | `agent.tools.websearch.output-limit` (default `8000`) |
+| Web search timeout | `AGENT_WEBSEARCH_TIMEOUT` | — | `agent.tools.websearch.timeout-seconds` (default `30`) |
 | HTTP proxy | `AGENT_HTTP_PROXY` | — | env only; e.g. `127.0.0.1:7890` — all outbound HTTP (LLM, MCP, OAuth) goes through it |
 
 Copy the example file and fill in real values:
@@ -157,6 +162,17 @@ The model can run system commands through the `exec` tool (OpenAI-style function
 - Disable with `AGENT_EXEC_ENABLED=false` (CLI) or `agent.tools.exec.enabled=false` (web): requests then carry no tools at all.
 
 > **Security note:** the exec tool lets the model run arbitrary commands on the host. Keep the service on localhost and disable the tool when the gateway is reachable by users who should not have shell access.
+
+## Web search
+
+The model can search the web through the `web_search` tool, backed by the [Tavily](https://tavily.com) search API. Both the CLI and the web gateway expose it, and like every tool its rounds run inside the turn.
+
+- Set `TAVILY_API_KEY` (or `agent.tools.websearch.api-key`) — without a key the tool is simply not registered, so the model never sees it.
+- One call returns a short generated answer (when Tavily provides one) plus top results with title, url, snippet and score. The tool description asks the model to quote result urls when the answer depends on them.
+- Arguments: `query` (required), plus optional `max_results` (1-10), `topic` (`general`/`news`), `search_depth` (`basic`/`advanced` — advanced costs more credits), and `time_range` (`day`/`week`/`month`/`year`).
+- Output is truncated to the configured limit (default 8000 characters). Bad arguments and API failures return as error text so the model can retry or tell the user.
+- Outbound requests honour `AGENT_HTTP_PROXY`, same as the LLM and MCP traffic.
+- Disable with `AGENT_WEBSEARCH_ENABLED=false` (CLI) or `agent.tools.websearch.enabled=false` (web).
 
 ## MCP tools
 

@@ -28,6 +28,8 @@ dependencies {
     runtimeOnly("io.jsonwebtoken:jjwt-jackson:0.12.6")
     // Aliyun OSS for the optional agent.files.store=oss artifact backend.
     implementation("com.aliyun.oss:aliyun-sdk-oss:3.18.1")
+    // JSON log encoder for logging.structured.format.file=logstash (SLS ingestion).
+    runtimeOnly("net.logstash.logback:logstash-logback-encoder:9.0")
     // Jakarta Mail (SMTP sending for invite codes); version from the Spring Boot BOM.
     implementation("org.eclipse.angus:angus-mail")
 

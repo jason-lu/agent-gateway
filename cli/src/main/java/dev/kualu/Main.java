@@ -2,6 +2,7 @@ package dev.kualu;
 
 import dev.kualu.llm.AgentTool;
 import dev.kualu.llm.tools.ExecTool;
+import dev.kualu.llm.tools.WebSearchTool;
 import dev.kualu.llm.client.LlmClient;
 import dev.kualu.llm.memory.MemoryCompressor;
 import dev.kualu.mcp.McpConnectionManager;
@@ -52,7 +53,9 @@ public class Main {
         }
         BufferedReader in = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
         McpConnectionManager mcp = mcpManager();
-        List<AgentTool> staticTools = execTools();
+        List<AgentTool> staticTools = new ArrayList<>();
+        staticTools.addAll(execTools());
+        staticTools.addAll(webSearchTools());
         try {
             new ChatConsole(client, in, System.out, streaming, compressor, () -> {
                 List<AgentTool> all = new ArrayList<>(staticTools);
@@ -123,6 +126,32 @@ public class Main {
                 timeout.toSeconds(), outputLimit, workdir.isBlank() ? "(inherited)" : workdir);
         return List.of(new ExecTool(new ExecTool.Config(
                 timeout, outputLimit, workdir.isBlank() ? null : Path.of(workdir))));
+    }
+
+    /**
+     * Builds the web-search tool from {@code AGENT_WEBSEARCH_*} / {@code TAVILY_API_KEY};
+     * empty when disabled or no API key is configured.
+     */
+    static List<AgentTool> webSearchTools() {
+        if (!Boolean.parseBoolean(envOr("AGENT_WEBSEARCH_ENABLED", "true"))) {
+            log.info("websearch-tool configured: enabled=false");
+            return List.of();
+        }
+        String apiKey = envOr("TAVILY_API_KEY", "").strip();
+        if (apiKey.isEmpty()) {
+            log.info("websearch-tool configured: enabled but no TAVILY_API_KEY - tool not registered");
+            return List.of();
+        }
+        String baseUrl = envOr("AGENT_WEBSEARCH_BASE_URL", WebSearchTool.Config.DEFAULT_BASE_URL);
+        int maxResults = Integer.parseInt(envOr("AGENT_WEBSEARCH_MAX_RESULTS", "5"));
+        int outputLimit = Integer.parseInt(envOr("AGENT_WEBSEARCH_OUTPUT_LIMIT", "8000"));
+        Duration timeout = Duration.ofSeconds(Long.parseLong(envOr("AGENT_WEBSEARCH_TIMEOUT", "30")));
+        boolean includeAnswer = Boolean.parseBoolean(envOr("AGENT_WEBSEARCH_INCLUDE_ANSWER", "true"));
+        log.info("websearch-tool configured: enabled=true, base-url={}, max-results={}, output-limit={},"
+                        + " timeout={}s, include-answer={}",
+                baseUrl, maxResults, outputLimit, timeout.toSeconds(), includeAnswer);
+        return List.of(new WebSearchTool(new WebSearchTool.Config(
+                apiKey, baseUrl, maxResults, outputLimit, timeout, includeAnswer)));
     }
 
     /** Builds the compressor from {@code AGENT_MEMORY_*}; returns null when disabled. */

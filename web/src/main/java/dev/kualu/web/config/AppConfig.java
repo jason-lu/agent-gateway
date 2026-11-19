@@ -2,6 +2,7 @@ package dev.kualu.web.config;
 
 import tools.jackson.databind.ObjectMapper;
 import dev.kualu.llm.tools.ExecTool;
+import dev.kualu.llm.tools.WebSearchTool;
 import dev.kualu.llm.client.ImageSource;
 import dev.kualu.llm.client.LlmClient;
 import dev.kualu.llm.memory.MemoryCompressor;
@@ -31,6 +32,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -293,6 +295,33 @@ public class AppConfig {
                 Duration.ofSeconds(properties.timeoutSeconds()),
                 properties.outputLimit(),
                 workdir == null ? null : Path.of(workdir)));
+    }
+
+    /**
+     * Web search through the Tavily API. Registered only when enabled and an API
+     * key is configured: the model sees no search tool (rather than a broken one)
+     * on deployments without credentials. {@code ChatService} picks up every
+     * {@code AgentTool} bean.
+     */
+    @Bean
+    @ConditionalOnExpression(
+            "'${agent.tools.websearch.enabled:true}' == 'true'"
+                    + " and '${agent.tools.websearch.api-key:}'.trim() != ''")
+    public WebSearchTool webSearchTool(WebSearchToolProperties properties) {
+        String baseUrl = properties.baseUrl() == null || properties.baseUrl().isBlank()
+                ? WebSearchTool.Config.DEFAULT_BASE_URL
+                : properties.baseUrl();
+        log.info("websearch-tool configured: enabled=true, base-url={}, max-results={}, output-limit={},"
+                        + " timeout={}s, include-answer={}",
+                baseUrl, properties.maxResults(), properties.outputLimit(),
+                properties.timeoutSeconds(), properties.includeAnswer());
+        return new WebSearchTool(new WebSearchTool.Config(
+                properties.apiKey().strip(),
+                baseUrl,
+                properties.maxResults(),
+                properties.outputLimit(),
+                Duration.ofSeconds(properties.timeoutSeconds()),
+                properties.includeAnswer()));
     }
 
     /**

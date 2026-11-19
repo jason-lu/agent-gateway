@@ -1,0 +1,44 @@
+{
+  "note": "LoongCollector（原 Logtail）采集配置取值参考——在 SLS 控制台「持续采集主机文本日志」向导中按下表填写。本文件不是控制台导入格式（控制台「导入其他配置」仅支持从其他 Project 导入配置）。流程以官方文档为准：https://help.aliyun.com/zh/sls/host-text-log-collection-auto-install",
+  "configName": "agent-web-json",
+  "machineGroup": {
+    "useCase": "主机场景",
+    "installEnv": "ECS",
+    "action": "创建机器组 → 勾选同地域 ECS → 安装并创建为机器组（一键安装 LoongCollector），等待心跳为 OK"
+  },
+  "input": {
+    "type": "文本日志采集",
+    "dir": "/opt/personal-assistant/logs",
+    "fileName": "agent-web*.log",
+    "maxMonitorDepth": 0,
+    "note": "路径两栏：目录填 dir、文件名填 fileName。只用这一种通配形式；不要在同一实例里再建 agent-web.log 的精确匹配配置，官方明确禁止混用两种形式（会重复采集）。"
+  },
+  "processing": {
+    "multiline": false,
+    "multilineNote": "日志为单行 JSON（换行已转义），保持关闭即可；如需开启请选「多行JSON」类型。",
+    "plugin": "原生解析插件 > 标准JSON解析",
+    "keepRawOnParseFailure": true,
+    "timeField": {
+      "useSystemTime": false,
+      "key": "@timestamp",
+      "format": "%Y-%m-%dT%H:%M:%S.%f",
+      "timezone": "GMT+08:00",
+      "note": "关闭「使用系统时间」后指定该 Key 与格式。%f 为秒的小数部分；+08:00 后缀按官方 RFC3339Nano 示例不写入格式串。若解析报错可改试 %Y-%m-%dT%H:%M:%S.%f%z。"
+    }
+  },
+  "output": {
+    "projectName": "jason-agent",
+    "logstoreName": "agent-log",
+    "region": "cn-shanghai",
+    "compressType": "lz4",
+    "logstoreBilling": "按写入数据量计费（含 30 天免费存储，适合本项目保留 30 天）",
+    "logstoreTtlDays": 30
+  },
+  "index": "向导「查询分析配置」页：全文索引默认开启；预览数据出现后点「自动生成索引」生成字段索引（对 level、logger_name 等字段开启统计才能做 SQL 聚合）。",
+  "verify": [
+    "服务器上 tail -f /opt/personal-assistant/logs/agent-web.log 并触发请求，确认有新增",
+    "sudo /etc/init.d/loongcollectord status",
+    "控制台 资源组 > 机器组 查看心跳为 OK，且本配置已移入「已生效 Logtail配置」",
+    "Logstore 查询页搜 *，确认 @timestamp/level/logger_name 字段出现且 __time__ 与日志时间一致"
+  ]
+}
