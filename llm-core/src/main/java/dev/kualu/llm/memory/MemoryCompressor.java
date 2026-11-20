@@ -39,6 +39,15 @@ public final class MemoryCompressor {
     /** Marks the summary system message produced by this compressor. */
     public static final String SUMMARY_PREFIX = "【历史对话摘要】";
 
+    /**
+     * Longest raw turn text kept verbatim in the summarisation request.
+     * Tool results are abbreviated much harder ({@link #MAX_TOOL_CHARS}):
+     * they are search dumps, not conversation, and an unbounded dump was
+     * dominating the summariser's input and drowning out the real questions.
+     */
+    static final int MAX_TURN_CHARS = 2000;
+    static final int MAX_TOOL_CHARS = 240;
+
     /** Name of the classpath resource holding the built-in instruction. */
     static final String DEFAULT_INSTRUCTION_RESOURCE = "summarize-instruction.txt";
 
@@ -166,7 +175,7 @@ public final class MemoryCompressor {
         }
 
         String previousSummary = summaryIndex >= 0
-                ? all.get(summaryIndex).content().substring(SUMMARY_PREFIX.length())
+                ? stripSummaryHeading(all.get(summaryIndex).content().substring(SUMMARY_PREFIX.length()))
                 : null;
         List<ChatMessage> dropped = List.copyOf(tail.subList(0, tailStartInTurns));
         int tailStartIndex = (summaryIndex >= 0 ? summaryIndex + 1 : systemIndex + 1) + tailStartInTurns;
@@ -223,8 +232,9 @@ public final class MemoryCompressor {
         int foldStart = plan.summaryIndex() >= 0 ? plan.summaryIndex() + 1
                 : (!all.isEmpty() && isSystem(all.get(0)) && !isSummary(all.get(0)) ? 1 : 0);
         int folded = plan.tailStartIndex() - foldStart;
-        log.info("{}: context {} -> {} (folded {} turns, summary {} chars)",
-                logPrefix(null), contextSize(all), contextSize(rebuilt), folded, summaryBody.length());
+        log.info("{}: context {} -> {} (folded {} turns, summary {} chars, input {} chars)",
+                logPrefix(null), contextSize(all), contextSize(rebuilt), folded, summaryBody.length(),
+                requestChars(plan));
         return true;
     }
 
@@ -283,6 +293,11 @@ public final class MemoryCompressor {
         return -1;
     }
 
+    /** Rough character size of a fold's summarisation request, for diagnosing oversized folds. */
+    private static int requestChars(FoldPlan plan) {
+        return plan.requestMessages().stream().mapToInt(m -> m.content().length()).sum();
+    }
+
     /**
      * Wraps the summary body into its marker message. If a future backend only
      * accepts a single system message, this is the one place to change.
@@ -300,6 +315,39 @@ public final class MemoryCompressor {
         return text.substring(0, cut);
     }
 
+    /**
+     * Truncates a turn's raw text for the summarisation request, keeping a
+     * marker so the summariser knows content was dropped. Tool results go
+     * through this with a much smaller cap (see {@link #MAX_TOOL_CHARS}).
+     */
+    private static String abbreviate(String text, int maxChars) {
+        if (text == null || text.length() <= maxChars) {
+            return text == null ? "" : text;
+        }
+        int cut = maxChars;
+        if (cut > 0 && Character.isHighSurrogate(text.charAt(cut - 1))) {
+            cut--;
+        }
+        return text.substring(0, cut) + "… [truncated " + (text.length() - cut) + " chars]";
+    }
+
+    /**
+     * Strips the leading markdown heading the summariser is told to open with
+     * (see {@code summarize-instruction.txt}). Incremental folds reuse the
+     * previous body as input, so the heading must not stack.
+     */
+    private static String stripSummaryHeading(String summary) {
+        String text = summary == null ? "" : summary.stripLeading();
+        if (!text.startsWith("#")) {
+            return text;
+        }
+        int nl = text.indexOf('\n');
+        if (nl < 0) {
+            return "";
+        }
+        return text.substring(nl + 1).stripLeading();
+    }
+
     /** Builds the summarisation request body. Visible for tests. */
     static String summarizePrompt(String previousSummary, List<ChatMessage> turns) {
         StringBuilder sb = new StringBuilder();
@@ -307,7 +355,8 @@ public final class MemoryCompressor {
         sb.append(previousSummary == null || previousSummary.isBlank() ? "(none)" : previousSummary);
         sb.append("\n\n[Older turns]\n");
         for (ChatMessage turn : turns) {
-            sb.append(turn.role()).append(": ").append(turn.content());
+            int cap = "tool".equals(turn.role()) ? MAX_TOOL_CHARS : MAX_TURN_CHARS;
+            sb.append(turn.role()).append(": ").append(abbreviate(turn.content(), cap));
             if (turn.images() != null && !turn.images().isEmpty()) {
                 sb.append("（附图 ").append(turn.images().size()).append(" 张）");
             }

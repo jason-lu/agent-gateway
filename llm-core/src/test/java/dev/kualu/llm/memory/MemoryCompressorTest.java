@@ -335,6 +335,49 @@ class MemoryCompressorTest {
     }
 
     @Test
+    void summarizePrompt_abbreviatesToolResults() {
+        String big = "r".repeat(1000);
+        String prompt = MemoryCompressor.summarizePrompt(null, List.of(ChatMessage.tool(big, "call_1")));
+
+        assertTrue(prompt.contains("tool: " + "r".repeat(MemoryCompressor.MAX_TOOL_CHARS) + "… [truncated "),
+                "the tool dump is cut to MAX_TOOL_CHARS with a marker");
+        assertTrue(prompt.contains("(toolCallId=call_1)"));
+        assertFalse(prompt.contains(big), "the raw dump must not be sent whole");
+        assertFalse(prompt.contains("r".repeat(MemoryCompressor.MAX_TOOL_CHARS + 1)),
+                "nothing beyond the cap survives");
+    }
+
+    @Test
+    void summarizePrompt_abbreviatesLongTurns() {
+        String big = "u".repeat(3000);
+        String prompt = MemoryCompressor.summarizePrompt(null, List.of(ChatMessage.user(big)));
+
+        assertTrue(prompt.contains("user: " + "u".repeat(MemoryCompressor.MAX_TURN_CHARS) + "… [truncated "),
+                "user turns are cut to MAX_TURN_CHARS");
+        assertFalse(prompt.contains(big));
+    }
+
+    @Test
+    void incremental_previousSummaryHeadingIsNotStacked() {
+        StubLlm llm = new StubLlm();
+        llm.replies = List.of("# 摘要\nFIRST-SUMMARY", "SECOND-SUMMARY");
+        MemoryCompressor compressor = new MemoryCompressor(llm, 6, 2, null, 4000);
+        ConversationMemory memory = conversation(3, "sys");
+
+        assertTrue(compressor.maybeCompress(memory, "test"));
+        for (int i = 3; i < 5; i++) {
+            memory.addUser("u" + i);
+            memory.addAssistant("a" + i);
+        }
+        assertTrue(compressor.maybeCompress(memory, "test"));
+
+        String secondPayload = llm.userPayloads.get(1);
+        assertTrue(secondPayload.contains("FIRST-SUMMARY"), "the previous summary body is passed on");
+        assertFalse(secondPayload.contains("# 摘要"),
+                "the old heading must not leak into the re-summarisation request");
+    }
+
+    @Test
     void invalidThresholds_areRejected() {
         StubLlm llm = new StubLlm();
         assertThrows(IllegalArgumentException.class, () -> new MemoryCompressor(llm, 10, 1, null, 4000));

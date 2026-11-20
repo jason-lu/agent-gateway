@@ -50,6 +50,8 @@ Every user picks a concrete model in the chat window (`GET /api/v1/llm/models` l
 | Turns kept verbatim | `AGENT_MEMORY_KEEP_MESSAGES` | — | `agent.memory.keep-messages` (default `8`) |
 | Summary length cap | `AGENT_MEMORY_MAX_SUMMARY_CHARS` | — | `agent.memory.max-summary-chars` (default `4000`) |
 | Summary instruction | `AGENT_MEMORY_INSTRUCTION` | — | `agent.memory.instruction` (default: `summarize-instruction.txt`) |
+| Summary provider | `AGENT_MEMORY_SUMMARY_PROVIDER` | — | `agent.memory.summary-provider` (default: empty → chat default model) |
+| Summary model | `AGENT_MEMORY_SUMMARY_MODEL` | — | `agent.memory.summary-model` (default: empty → chat default model; set to a fast/cheap model) |
 | Exec tool | `AGENT_EXEC_ENABLED` | — | `agent.tools.exec.enabled` (default `true`) |
 | Exec timeout | `AGENT_EXEC_TIMEOUT` | — | `agent.tools.exec.timeout-seconds` (default `60`) |
 | Exec output limit | `AGENT_EXEC_OUTPUT_LIMIT` | — | `agent.tools.exec.output-limit` (default `8000`) |
@@ -120,6 +122,7 @@ By default the full history is sent with every request, so long conversations gr
 - When the context passes `max-messages` (default 20), the oldest turns are folded into a single summary message.
 - The most recent `keep-messages` turns (default 8) always stay verbatim; the cut never splits a turn and never orphans a tool result.
 - The summary is regenerated incrementally — the previous summary plus the turns that just aged out — so the cost does not grow with the conversation.
+- The summarisation input is bounded too: each folded turn is truncated before the summary prompt is built (user/assistant at 2000 chars, `tool` results at 240 chars), so raw web-search dumps can't drown out the real questions.
 - The summary body is capped at `max-summary-chars` (default 4000): the summarisation call passes the same number as `max_tokens`, and any overlong output is truncated, so the payload stays bounded even over very long sessions.
 - Request layout: `[tool policy][system prompt][summary][recent turns]`. The tool policy (a standing system message from `tool-policy.txt`) leads the request only while tools are on offer and is never stored. The summary carries the `【历史对话摘要】` marker and is hidden from `/history` and from `GET /api/v1/sessions/{id}/messages`.
 - Compression runs **after** the turn, on a background thread, so the user never waits for the summariser: the turn that crosses the threshold pays one uncompressed payload, and the next turn already sees the folded context. The fold is prepared and applied under the session lock; the summarisation call runs outside it. If the summarisation call fails the history is left untouched and the next turn retries.

@@ -1,7 +1,7 @@
 ---
 feature: memory-summarization
 status: delivered
-updated: 2026-11-05
+updated: 2026-11-20
 source: main
 ---
 
@@ -127,7 +127,7 @@ public List<ChatMessage> context()
 | 覆盖 | 构造参数 `instruction` / `agent.memory.instruction` / `AGENT_MEMORY_INSTRUCTION` |
 | 缺失 | 视为打包错误，类初始化直接抛 `IllegalStateException`（不做静默回退） |
 
-调提示词（摘要要保什么、什么语气、输出什么）只改 `.txt`，不动 Java 代码、不用重新编译逻辑。指令正文覆盖：用户目标与约束、关键决策及理由、具体事实（名称/路径/ID/命令/版本/报错原文）、已完成与未决事项；用与对话相同的语言，密度优先，只输出摘要本体。
+调提示词（摘要要保什么、什么语气、输出什么）只改 `.txt`，不动 Java 代码、不用重新编译逻辑。指令正文覆盖：用户目标与约束、关键决策及理由、具体事实（名称/路径/ID/命令/版本/报错原文）、已完成与未决事项；用与对话相同的语言，密度优先，只输出摘要本体。指令同时强制两条输出纪律：把 `[Older turns]` 当只读历史（不得续写、不得回答其中消息、不得对用户说话），并要求输出以 `# 摘要` 一级标题开头（英文会话用 `# Summary`）——把摘要与"聊天回复"锚定区分开。
 
 `user` 载荷格式（**仍在代码里**——它是请求装配结构而非提示词措辞，`summarizePrompt` 一处组装）：
 
@@ -141,7 +141,9 @@ role: content
 ...
 ```
 
-返回文本写回时加上前缀：`【历史对话摘要】` + 返回文本。
+**输入有界（2026-11-20 修订）**：`[Older turns]` 里每条 `content` 都被 `abbreviate()` 截断——普通 user/assistant 轮次上限 `MAX_TURN_CHARS = 2000`，`tool` 结果上限 `MAX_TOOL_CHARS = 240`，超出部分带 `… [truncated N chars]` 标记。tool 结果是搜索原文 dump、不是对话，所以缩得最狠，避免它把真正的问答淹没（此前正是无界 tool dump 撑爆摘要模型输入、导致"只总结第一个问题"）。截断做了代理对（surrogate pair）安全处理。
+
+返回文本写回时加上前缀：`【历史对话摘要】` + 返回文本。增量压缩前，旧摘要正文会先经 `stripSummaryHeading()` 剥掉开头的 `# 摘要`/`# Summary` 标题行，避免二次折叠叠加出 `# 摘要\n# 摘要`。
 
 **后端兼容性**：摘要以独立 `system` 消息出现在折叠分界点（OpenAI 风格普遍支持）。若目标后端只允许单条 system，改为把摘要拼进原 system 提示末尾——改动集中在 `buildSummaryMessage` 一处。
 
@@ -164,26 +166,16 @@ role: content
 
 ### [S2.6] 集成
 
-**时机：在构建 payload *之前* 压缩**，这样当轮请求就已经是有界的；而不是压完这轮、下轮才生效。
+**时机：web 在当轮结束之后异步压缩，cli 在构建 payload 之前同步压缩。** web 让压缩彻底离开用户可见的那一轮（跨阈值的当轮仍发一次未压缩 payload，下一轮才看到折叠后的 context）；cli 保持同步、失败即跳过。
 
-`web` — `ChatService.chat` / `ChatService.chatStream`（`web/.../ChatService.java:38`）的 `synchronized` 块内：
-
-```java
-synchronized (session.memory()) {
-    compressor.maybeCompress(session.memory(), "session=" + session.id());  // 失败只记 WARN，继续
-    String reply = llmClient.chat(session.memory().withUser(content));
-    session.memory().addUser(content).addAssistant(reply);
-    sessionStore.update(session);
-    return reply;
-}
-```
+`web` — `ChatService.chat` / `chatStream` 在 tool loop 结束后调用 `scheduleCompress(session)`：`shouldCompress` 命中就把 `runCompression` 提交到单线程 daemon `compressExecutor`。`runCompression` 分三步——会话锁内 `prepare` 取折叠计划 → 锁外 `summarize`（慢模型不阻塞下一轮）→ 再锁内 `apply` 并持久化（折叠点移动后用 `replaceMessages` 全量重写）。失败只记 WARN，历史不动，下一轮重试。
 
 - 压缩器通过 Spring `@ConfigurationProperties(prefix = "agent.memory")` 注入，未启用时不占 bean。
-- 压缩期间的 LLM 调用发生在 per-session 锁内，与既有"同一会话串行"语义一致；锁持有时间变长是已知代价（见 Journey log）。
+- `prepare`/`apply` 在 per-session 锁内，`summarize` 在锁外；单线程 executor 保证同一会话的折叠串行，与既有"同一会话串行"语义一致。
 - `ChatService.history()` 现在只筛 `user`/`assistant`，摘要的 `system` 消息天然不进历史 API——保持不变，本特性不改 HTTP 契约。
 - 启动期由 `ChatService`（或配置 bean）打一条 `INFO`：`memory-compress configured: ...`（见 S2.8）。
 
-`cli` — `ChatConsole`（`cli/.../ChatConsole.java`）在 `memory.withUser(message)` 之前同样调用 `maybeCompress(memory, "cli")`。压缩器由 `Main` 按 env 构造后传入；`ChatConsole` 现有构造器保持兼容（新增一个重载或接受 nullable 压缩器，null = 关闭）。
+`cli` — `ChatConsole`（`cli/.../ChatConsole.java`）在 `memory.withUser(message)` 之前同步调用 `compressor.maybeCompress(memory, "cli")`（prepare + summarize + apply 一体）。压缩器由 `Main` 按 env 构造后传入；`ChatConsole` 现有构造器保持兼容（新增一个重载或接受 nullable 压缩器，null = 关闭）。
 
 - `/history`、`/status` 的行为不变；`/status` 的 `memory size` 仍是 `memory.size()`（完整历史条数，压缩不减小它——历史要完整保留）。
 - `/clear` 仍然 `memory.clear()`，摘要随历史一起丢弃。
@@ -212,7 +204,7 @@ synchronized (session.memory()) {
 
 | 事件 | 级别 | 示例 |
 |---|---|---|
-| 压缩成功 | `INFO` | `memory-compress[session=abc123]: context 24 -> 6 (folded 14 turns, summary 812 chars, 1370 ms)` |
+| 压缩成功 | `INFO` | `memory-compress[session=abc123]: context 24 -> 6 (folded 14 turns, summary 812 chars, input 5230 chars)` |
 | 摘要失败 | `WARN` + throwable 栈 | `memory-compress[session=abc123] FAILED: <reason>; history left unchanged (size 24)` |
 | 无合法切点跳过 | `DEBUG` | `memory-compress[session=abc123] skipped: no user-turn cut point (size 24)` |
 | 配置加载（启动期，由调用方打） | `INFO` | `memory-compress configured: enabled=true, max-messages=20, keep-messages=8` |
@@ -228,7 +220,8 @@ synchronized (session.memory()) {
 | `context N -> M` | 压缩前后发给模型的 context 条数 |
 | `folded K turns` | 本次被并入摘要的原文条数 |
 | `summary S chars` | 新摘要正文长度（不含 `【历史对话摘要】` 前缀） |
-| `elapsed T ms` | 摘要 LLM 调用耗时 |
+| `input N chars` | 摘要请求正文字符数（含指令与 user 载荷），用于诊断超长折叠 |
+| `elapsed T ms` | 摘要 LLM 调用耗时（cli 同步路径在 `maybeCompress` 里单独打 `summarisation call N ms`） |
 
 日志文案不作为对外契约。`llm-core` 单测只断言行为与返回值，不断言日志文本（默认 NOP 绑定）；`web` 侧可选用 logback `ListAppender` 断言失败路径确实发了 WARN，不阻塞主线交付。
 
@@ -240,6 +233,8 @@ synchronized (session.memory()) {
 - 高于阈值：旧轮次被并入摘要但**原文保留在 `messages()`**；`context()` 呈 `[system 原提示][摘要][tail]`；原 system 提示逐字节不变。
 - tail 起点必为 `user`：构造切点落在 `assistant`/`tool` 的输入，断言回退到更早的 `user`。
 - 增量：连续两次压缩，断言第二次的调用入参含旧摘要正文 + 被挤出的轮次，且不含更早原文。
+- 增量标题不叠加：旧摘要以 `# 摘要` 开头时，二次压缩的 `[Previous summary]` 已剥掉标题、不含旧标题。
+- 输入截断：长 user/assistant 轮次被截到 `MAX_TURN_CHARS`、长 tool 结果被截到 `MAX_TOOL_CHARS`，带 `[truncated]` 标记且原文不整段外发。
 - 摘要失败（stub 抛异常）：历史与调用前完全一致，返回 false，不抛。
 - 前缀识别：已有摘要能被找到并正确剥离前缀；不含前缀的 system 消息不会被误认。
 - 配置校验：`keepMessages < 2`、`maxMessages <= keepMessages + 2`、非正数 → `IllegalArgumentException`。
@@ -285,3 +280,4 @@ synchronized (session.memory()) {
 - **压缩发生在 per-session 锁内**：web 侧 `maybeCompress` 在 `synchronized (session.memory())` 里，摘要 LLM 调用会拉长锁持有时间。与既有「同一会话串行」语义一致，但高峰并发下值得留意。
 - **`turns.size() <= keepMessages` 的前置守卫被去掉了**：配置校验已保证 `maxMessages > keepMessages + 2`，而触发条件是 `size() > maxMessages`、头部最多占 2 条，所以 `turns.size() > keepMessages` 恒成立。改为让 `tailStartInTurns <= 0` 统一兜底，少一条不可达分支，也不会走到 `subList` 负数下标。
 - **压缩改为非破坏性折叠（2026-11-05 修订）**：初版压缩用 `replaceAll` 原地丢弃旧轮次，但 `/history`、web 历史 API 与 `messages` jsonb 持久化都读 `messages()`——旧记录跟着消失，不符合「历史完整保留、只有发给 LLM 的是压缩上下文」的预期。修订后原文轮次永不删除：`messages()` 是完整历史，摘要标记停在折叠分界点（`[system][已折叠原文][摘要][tail]`），新增 `context()` 产出 `[system][摘要][tail]` 供 `withUser` / `ToolLoop` 拼请求。触发条件同步改为按 `context().size()` 计数（`messages()` 只增不减，按 `size()` 会在长会话每轮误触发）；增量摘要只喂「旧摘要 + 新变旧的轮次」，已折叠原文不再重放。持久化格式不变（摘要仍是 messages 数组里的 system 消息），旧压缩会话 `[system][摘要][tail]` 按「折叠点 = 摘要位置」解读即可兼容。代价是存储随会话线性增长——这正是「保留聊天历史」的题中之义，由会话生命周期兜底。
+- **摘要输入有界 + 标题纪律（2026-11-20 修订）**：线上出现「历史对话摘要只总结第一个问题」——根因是摘要请求的**输入无上限**：`summarizePrompt` 把每条被折叠轮次的 `content()` 原样拼进 `[Older turns]`，`tool` 结果（web_search 单条最长 8000 字符）把真正的问答淹没，flash 摘要模型的注意力只落在开头第一条，且输出成聊天口吻而非摘要。修订分两层：① 指令（`summarize-instruction.txt`）加「`[Older turns]` 只读、不得续写/回答」+「输出以 `# 摘要` 标题开头」两条纪律；② 代码（`MemoryCompressor`）给输入加界——`abbreviate()` 按角色截断（`MAX_TURN_CHARS=2000`、`MAX_TOOL_CHARS=240`，带 `[truncated]` 标记），增量压缩前用 `stripSummaryHeading()` 剥掉旧标题避免叠加，成功日志加 `input N chars` 便于诊断超长折叠。部署侧摘要模型从 flash 换到 `mimo-v2.6-pro`（`AGENT_MEMORY_SUMMARY_MODEL`）。
