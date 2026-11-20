@@ -49,7 +49,7 @@ public class SettingsController {
     @GetMapping
     public List<McpServerResponse> list(Authentication authentication) {
         String owner = authentication.getName();
-        Map<String, Boolean> states = connectionStates(owner);
+        Map<String, UserMcpRegistry.ServerState> states = connectionStates(owner);
         return store.listByOwner(owner).stream()
                 .map(server -> toResponse(server, statusOf(server, states)))
                 .toList();
@@ -144,7 +144,7 @@ public class SettingsController {
         return merged;
     }
 
-    private Map<String, Boolean> connectionStates(String owner) {
+    private Map<String, UserMcpRegistry.ServerState> connectionStates(String owner) {
         UserMcpRegistry registry = registries.getIfAvailable();
         return registry == null ? Map.of() : registry.connectionStates(owner);
     }
@@ -156,12 +156,20 @@ public class SettingsController {
         }
     }
 
-    private static String statusOf(UserMcpServer server, Map<String, Boolean> states) {
+    private static String statusOf(UserMcpServer server, Map<String, UserMcpRegistry.ServerState> states) {
         if (!server.enabled()) {
             return "disabled";
         }
-        Boolean connected = states.get(server.name());
-        return connected == null ? "unknown" : connected ? "connected" : "disconnected";
+        UserMcpRegistry.ServerState state = states.get(server.name());
+        if (state == null) {
+            return "unknown";
+        }
+        if (!state.connected()) {
+            return "disconnected";
+        }
+        // A session with an empty tool list is "connected" in name only — tools/list
+        // failed (rate limit, flaky upstream) and is being retried in the background.
+        return state.toolCount() == 0 ? "no_tools" : "connected";
     }
 
     private static McpServerResponse toResponse(UserMcpServer server, String status) {

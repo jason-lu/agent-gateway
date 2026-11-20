@@ -9,6 +9,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
@@ -45,6 +46,95 @@ class McpConnectionManagerTest {
             assertTrue(manager.awaitInitialConnect(Duration.ofSeconds(5)));
             assertEquals(List.of("mcp_playwright_navigate"), names(manager.tools()));
         }
+    }
+
+    @Test
+    void aHangingToolsListIsCutOffInsteadOfBlockingConnect() {
+        // The send itself blocks (an SSE response body that never completes) — the
+        // request timeout must cover it, not just the wait for dispatch.
+        List<FakeMcpTransport> created = new CopyOnWriteArrayList<>();
+        Function<McpServerConfig, McpTransport> factory = config -> {
+            FakeMcpTransport transport = new FakeMcpTransport();
+            Function<JsonObject, JsonObject> delegate = script(new AtomicReference<>(List.of("t")));
+            transport.responder = message -> {
+                if (message.has("id") && "tools/list".equals(message.get("method").getAsString())) {
+                    try {
+                        Thread.sleep(30_000);
+                    } catch (InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+                return delegate.apply(message);
+            };
+            created.add(transport);
+            return transport;
+        };
+        long start = System.nanoTime();
+        try (McpConnectionManager manager = new McpConnectionManager(
+                List.of(McpServerConfig.stdio("hang", List.of("cmd"), null)),
+                TIMEOUT, TIMEOUT, 1000, Duration.ZERO, factory, null)) {
+            manager.start();
+            assertTrue(manager.awaitInitialConnect(Duration.ofSeconds(10)));
+            assertTrue(manager.tools().isEmpty());
+        }
+        long elapsedSeconds = Duration.ofNanos(System.nanoTime() - start).toSeconds();
+        assertTrue(elapsedSeconds < 15,
+                "connect must be bounded by the call timeout but took " + elapsedSeconds + "s");
+    }
+
+    @Test
+    void aFailedToolsListRecoversOnTheNextRefresh() {
+        List<FakeMcpTransport> created = new CopyOnWriteArrayList<>();
+        AtomicBoolean failToolsList = new AtomicBoolean(true);
+        AtomicReference<List<String>> toolNames = new AtomicReference<>(List.of("alpha"));
+        Function<McpServerConfig, McpTransport> factory = config -> {
+            FakeMcpTransport transport = new FakeMcpTransport();
+            Function<JsonObject, JsonObject> delegate = script(toolNames);
+            transport.responder = message -> {
+                if (message.has("id") && "tools/list".equals(message.get("method").getAsString())
+                        && failToolsList.get()) {
+                    JsonObject response = new JsonObject();
+                    response.addProperty("jsonrpc", "2.0");
+                    response.addProperty("id", message.get("id").getAsLong());
+                    JsonObject error = new JsonObject();
+                    error.addProperty("code", -32000);
+                    error.addProperty("message", "rate limited");
+                    response.add("error", error);
+                    return response;
+                }
+                return delegate.apply(message);
+            };
+            created.add(transport);
+            return transport;
+        };
+        try (McpConnectionManager manager = new McpConnectionManager(
+                List.of(McpServerConfig.stdio("demo", List.of("cmd"), null)),
+                TIMEOUT, TIMEOUT, 1000, Duration.ZERO, factory, null)) {
+            manager.start();
+            assertTrue(manager.awaitInitialConnect(Duration.ofSeconds(5)));
+            // Session up but the tool list failed: connected in name only.
+            assertTrue(manager.tools().isEmpty());
+            assertEquals(0, manager.serverToolCounts().get("demo"));
+
+            failToolsList.set(false);
+            JsonObject notification = new JsonObject();
+            notification.addProperty("jsonrpc", "2.0");
+            notification.addProperty("method", "notifications/tools/list_changed");
+            created.get(0).deliver(notification);
+
+            assertEquals(List.of("mcp_demo_alpha"), names(manager.tools()));
+            assertEquals(1, manager.serverToolCounts().get("demo"));
+        }
+    }
+
+    @Test
+    void toolsRetryDelayBacksOffTowardFiveMinutes() {
+        assertEquals(Duration.ofSeconds(15), McpConnectionManager.toolsRetryDelay(1));
+        assertEquals(Duration.ofSeconds(30), McpConnectionManager.toolsRetryDelay(2));
+        assertEquals(Duration.ofSeconds(60), McpConnectionManager.toolsRetryDelay(3));
+        assertEquals(Duration.ofSeconds(240), McpConnectionManager.toolsRetryDelay(5));
+        assertEquals(Duration.ofMinutes(5), McpConnectionManager.toolsRetryDelay(9));
+        assertEquals(Duration.ofMinutes(5), McpConnectionManager.toolsRetryDelay(50));
     }
 
     @Test

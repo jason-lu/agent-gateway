@@ -15,6 +15,10 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -35,6 +39,9 @@ public final class McpSession implements AutoCloseable {
     public static final String CLIENT_NAME = "dev.kualu.agent";
     public static final String CLIENT_VERSION = "1.0";
 
+    /** Notifications get no response, so their send needs its own bound. */
+    private static final Duration NOTIFY_TIMEOUT = Duration.ofSeconds(10);
+
     private static final Logger log = LoggerFactory.getLogger(McpSession.class);
 
     private final McpTransport transport;
@@ -43,6 +50,16 @@ public final class McpSession implements AutoCloseable {
     private final Map<String, List<Consumer<JsonObject>>> notificationHandlers = new ConcurrentHashMap<>();
     private final List<Runnable> closeHandlers = new CopyOnWriteArrayList<>();
     private final AtomicBoolean closedFired = new AtomicBoolean();
+    /**
+     * Sends run here so the caller's timeout covers the whole round trip: a
+     * transport {@code send} may block forever on a response body that never
+     * completes (an SSE stream kept open), which a wait-side timeout cannot cut.
+     */
+    private final ExecutorService sendExecutor = Executors.newCachedThreadPool(runnable -> {
+        Thread thread = new Thread(runnable, "mcp-send");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     private volatile String protocolVersion;
     private volatile JsonObject serverCapabilities = new JsonObject();
@@ -119,22 +136,35 @@ public final class McpSession implements AutoCloseable {
         long id = nextId.getAndIncrement();
         CompletableFuture<JsonObject> future = new CompletableFuture<>();
         pending.put(id, future);
+        Future<?> send = null;
         try {
-            transport.send(JsonRpc.request(id, method, params));
-            try {
-                return future.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
-            } catch (TimeoutException ex) {
-                throw new McpException("mcp request timed out after " + timeout.toMillis() + "ms: " + method);
-            } catch (InterruptedException ex) {
-                Thread.currentThread().interrupt();
-                throw new McpException("mcp request interrupted: " + method, ex);
-            } catch (ExecutionException ex) {
-                Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
-                if (cause instanceof McpException mcp) {
-                    throw mcp;
+            send = sendExecutor.submit(() -> {
+                try {
+                    transport.send(JsonRpc.request(id, method, params));
+                } catch (RuntimeException ex) {
+                    future.completeExceptionally(ex);
                 }
-                throw new McpException("mcp request failed: " + method + ": " + cause.getMessage(), cause);
+            });
+            return future.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (RejectedExecutionException ex) {
+            throw new McpException("mcp session is closed: " + method, ex);
+        } catch (TimeoutException ex) {
+            if (send != null) {
+                send.cancel(true);
             }
+            throw new McpException("mcp request timed out after " + timeout.toMillis() + "ms: " + method);
+        } catch (InterruptedException ex) {
+            if (send != null) {
+                send.cancel(true);
+            }
+            Thread.currentThread().interrupt();
+            throw new McpException("mcp request interrupted: " + method, ex);
+        } catch (ExecutionException ex) {
+            Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+            if (cause instanceof McpException mcp) {
+                throw mcp;
+            }
+            throw new McpException("mcp request failed: " + method + ": " + cause.getMessage(), cause);
         } finally {
             pending.remove(id);
         }
@@ -142,7 +172,33 @@ public final class McpSession implements AutoCloseable {
 
     /** Sends a JSON-RPC notification (no response expected). */
     public void notify(String method, JsonObject params) {
-        transport.send(JsonRpc.notification(method, params));
+        sendBounded(JsonRpc.notification(method, params), NOTIFY_TIMEOUT);
+    }
+
+    /** Runs a fire-and-forget send with a hard deadline so it cannot hang the caller. */
+    private void sendBounded(JsonObject message, Duration timeout) {
+        Future<?> send;
+        try {
+            send = sendExecutor.submit(() -> transport.send(message));
+        } catch (RejectedExecutionException ex) {
+            throw new McpException("mcp session is closed", ex);
+        }
+        try {
+            send.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException ex) {
+            send.cancel(true);
+            throw new McpException("mcp send timed out after " + timeout.toMillis() + "ms");
+        } catch (InterruptedException ex) {
+            send.cancel(true);
+            Thread.currentThread().interrupt();
+            throw new McpException("mcp send interrupted", ex);
+        } catch (ExecutionException ex) {
+            Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+            if (cause instanceof McpException mcp) {
+                throw mcp;
+            }
+            throw new McpException("mcp send failed: " + cause.getMessage(), cause);
+        }
     }
 
     /** Liveness check ({@code ping}); returns when the server answers. */
@@ -232,6 +288,7 @@ public final class McpSession implements AutoCloseable {
     @Override
     public void close() {
         open = false;
+        sendExecutor.shutdownNow();
         try {
             transport.close();
         } catch (RuntimeException ex) {

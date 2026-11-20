@@ -43,6 +43,9 @@ public final class McpConnectionManager implements AutoCloseable {
     public static final int DEFAULT_OUTPUT_LIMIT = 8000;
     public static final Duration DEFAULT_REFRESH_INTERVAL = Duration.ofMinutes(5);
     private static final Duration MAX_BACKOFF = Duration.ofMinutes(5);
+    /** A failed {@code tools/list} (rate limit, flaky upstream) retries long before the periodic refresh. */
+    private static final Duration TOOLS_RETRY_BASE = Duration.ofSeconds(15);
+    private static final Duration TOOLS_RETRY_MAX = Duration.ofMinutes(5);
 
     private static final Logger log = LoggerFactory.getLogger(McpConnectionManager.class);
 
@@ -204,6 +207,15 @@ public final class McpConnectionManager implements AutoCloseable {
         return Collections.unmodifiableMap(states);
     }
 
+    /** Server name → tool count for every configured server (0 while down or still listing). */
+    public Map<String, Integer> serverToolCounts() {
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        for (Map.Entry<String, ServerConnection> entry : connections.entrySet()) {
+            counts.put(entry.getKey(), entry.getValue().tools.size());
+        }
+        return Collections.unmodifiableMap(counts);
+    }
+
     private void connect(ServerConnection connection) {
         try {
             if (closed.get()) {
@@ -273,9 +285,35 @@ public final class McpConnectionManager implements AutoCloseable {
                         callTimeout(connection), outputLimit));
             }
             connection.tools = List.copyOf(adapters);
+            if (connection.toolsFailures.getAndSet(0) > 0) {
+                log.info("mcp tools/list recovered for {}: {} tool(s)",
+                        connection.config.name(), connection.tools.size());
+            }
         } catch (RuntimeException ex) {
-            log.warn("mcp tools/list failed for {}: {}", connection.config.name(), ex.getMessage());
+            int attempt = connection.toolsFailures.incrementAndGet();
+            Duration delay = toolsRetryDelay(attempt);
+            log.warn("mcp tools/list failed for {} (attempt {}): {}; retrying in {}s",
+                    connection.config.name(), attempt, ex.getMessage(), delay.toSeconds());
+            scheduleToolsRetry(connection, delay);
         }
+    }
+
+    /** Retries the tool list of a still-open connection; the next attempt is never further than {@link #TOOLS_RETRY_MAX} away. */
+    private void scheduleToolsRetry(ServerConnection connection, Duration delay) {
+        if (closed.get()) {
+            return;
+        }
+        scheduler.schedule(() -> {
+            if (!closed.get() && connection.connected()) {
+                refreshTools(connection);
+            }
+        }, delay.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    static Duration toolsRetryDelay(int attempt) {
+        int shift = Math.min(Math.max(attempt - 1, 0), 5);
+        long millis = Math.min(TOOLS_RETRY_BASE.toMillis() * (1L << shift), TOOLS_RETRY_MAX.toMillis());
+        return Duration.ofMillis(millis);
     }
 
     private Duration callTimeout(ServerConnection connection) {
@@ -310,6 +348,8 @@ public final class McpConnectionManager implements AutoCloseable {
 
         final McpServerConfig config;
         final AtomicInteger attempts = new AtomicInteger();
+        /** Consecutive {@code tools/list} failures; drives the retry backoff. */
+        final AtomicInteger toolsFailures = new AtomicInteger();
         volatile McpSession session;
         volatile List<McpToolAdapter> tools = List.of();
         volatile ScheduledFuture<?> reconnectTask;

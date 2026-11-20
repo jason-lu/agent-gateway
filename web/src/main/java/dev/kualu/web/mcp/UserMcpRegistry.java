@@ -10,7 +10,9 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -18,6 +20,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Per-owner MCP connection managers. Each user's own server set — credentials
@@ -31,6 +34,10 @@ public class UserMcpRegistry implements AutoCloseable {
 
     /** A user's tool snapshot plus the server names it defines (for global overrides). */
     public record UserTools(List<AgentTool> tools, Set<String> serverNames) {
+    }
+
+    /** Per-server connection state for status displays: open session and tool count. */
+    public record ServerState(boolean connected, int toolCount) {
     }
 
     private static final Logger log = LoggerFactory.getLogger(UserMcpRegistry.class);
@@ -62,13 +69,16 @@ public class UserMcpRegistry implements AutoCloseable {
     /**
      * Tools from the owner's currently connected servers, plus the names of every
      * server they define (so same-named global servers can be held back). Waits
-     * briefly for the first connection attempts so a turn right after a config
-     * change still sees the new tools.
+     * briefly for the first connection attempts — once per manager — so a turn
+     * right after a config change sees the new tools without paying the wait on
+     * every later turn.
      */
     public UserTools toolsFor(String owner) {
         Entry entry = entryFor(owner);
         entry.touch();
-        entry.manager.awaitInitialConnect(INITIAL_CONNECT_WAIT);
+        if (entry.awaitedInitial.compareAndSet(false, true)) {
+            entry.manager.awaitInitialConnect(INITIAL_CONNECT_WAIT);
+        }
         Set<String> names = new HashSet<>();
         for (UserMcpServer server : entry.config) {
             if (server.enabled()) {
@@ -84,16 +94,23 @@ public class UserMcpRegistry implements AutoCloseable {
      * {@code null} (the API layer shows 待连接) and the caller can poll for the
      * settled state.
      */
-    public Map<String, Boolean> connectionStates(String owner) {
+    public Map<String, ServerState> connectionStates(String owner) {
         Entry entry = entryFor(owner);
         entry.touch();
-        return entry.manager.awaitInitialConnect(Duration.ZERO)
-                ? entry.manager.serverStates()
-                : Map.of();
+        if (!entry.manager.awaitInitialConnect(Duration.ZERO)) {
+            return Map.of();
+        }
+        Map<String, Boolean> connected = entry.manager.serverStates();
+        Map<String, Integer> toolCounts = entry.manager.serverToolCounts();
+        Map<String, ServerState> states = new LinkedHashMap<>();
+        for (String name : connected.keySet()) {
+            states.put(name, new ServerState(connected.get(name), toolCounts.getOrDefault(name, 0)));
+        }
+        return Collections.unmodifiableMap(states);
     }
 
     /** Drops the owner's manager; the next turn rebuilds it from the store. */
-    public void invalidate(String owner) {
+    public synchronized void invalidate(String owner) {
         Entry entry = byOwner.remove(owner);
         if (entry != null) {
             entry.manager.close();
@@ -108,7 +125,7 @@ public class UserMcpRegistry implements AutoCloseable {
         }
     }
 
-    private void evictIdle() {
+    private synchronized void evictIdle() {
         long cutoff = System.currentTimeMillis() - IDLE_TIMEOUT.toMillis();
         for (Map.Entry<String, Entry> mapEntry : byOwner.entrySet()) {
             Entry entry = mapEntry.getValue();
@@ -119,7 +136,8 @@ public class UserMcpRegistry implements AutoCloseable {
         }
     }
 
-    private Entry entryFor(String owner) {
+    /** Synchronized so concurrent callers never build (and connect) two managers for one owner. */
+    private synchronized Entry entryFor(String owner) {
         List<UserMcpServer> config = effectiveConfig(owner);
         Entry current = byOwner.get(owner);
         if (current != null && current.config.equals(config)) {
@@ -171,6 +189,8 @@ public class UserMcpRegistry implements AutoCloseable {
 
         final List<UserMcpServer> config;
         final McpConnectionManager manager;
+        /** The first turn after a rebuild waits for warm-up; later turns don't. */
+        final AtomicBoolean awaitedInitial = new AtomicBoolean();
         volatile long lastUsedMillis = System.currentTimeMillis();
 
         Entry(List<UserMcpServer> config, McpConnectionManager manager) {

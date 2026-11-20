@@ -110,7 +110,8 @@ public final class ApiDtos {
     /**
      * One user-configured MCP server. {@code env}/{@code headers} values are masked
      * ({@code ••••••••}) — real credentials never leave the server. {@code status} is
-     * {@code connected}, {@code disconnected}, {@code disabled} or {@code unknown}.
+     * {@code connected}, {@code no_tools} (session up but tools/list still failing),
+     * {@code disconnected}, {@code disabled} or {@code unknown}.
      */
     public record McpServerResponse(
             String name,
