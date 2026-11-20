@@ -36,6 +36,9 @@ public class UserMcpRegistry implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(UserMcpRegistry.class);
     private static final Duration IDLE_TIMEOUT = Duration.ofMinutes(30);
     private static final Duration SWEEP_INTERVAL = Duration.ofMinutes(5);
+    /** Bound on the first-turn wait for connection attempts (they run in parallel). */
+    private static final Duration INITIAL_CONNECT_WAIT =
+            McpConnectionManager.DEFAULT_HANDSHAKE_TIMEOUT.plusSeconds(2);
 
     private final UserMcpServerStore store;
     private final UserToolEnvStore toolEnvStore;
@@ -58,11 +61,14 @@ public class UserMcpRegistry implements AutoCloseable {
 
     /**
      * Tools from the owner's currently connected servers, plus the names of every
-     * server they define (so same-named global servers can be held back).
+     * server they define (so same-named global servers can be held back). Waits
+     * briefly for the first connection attempts so a turn right after a config
+     * change still sees the new tools.
      */
     public UserTools toolsFor(String owner) {
         Entry entry = entryFor(owner);
         entry.touch();
+        entry.manager.awaitInitialConnect(INITIAL_CONNECT_WAIT);
         Set<String> names = new HashSet<>();
         for (UserMcpServer server : entry.config) {
             if (server.enabled()) {
@@ -72,11 +78,18 @@ public class UserMcpRegistry implements AutoCloseable {
         return new UserTools(entry.manager.tools(), Set.copyOf(names));
     }
 
-    /** Connection state per configured server name for this owner. */
+    /**
+     * Connection state per configured server name for this owner. Never blocks on
+     * handshakes: while the first attempts are still in flight every server reports
+     * {@code null} (the API layer shows 待连接) and the caller can poll for the
+     * settled state.
+     */
     public Map<String, Boolean> connectionStates(String owner) {
         Entry entry = entryFor(owner);
         entry.touch();
-        return entry.manager.serverStates();
+        return entry.manager.awaitInitialConnect(Duration.ZERO)
+                ? entry.manager.serverStates()
+                : Map.of();
     }
 
     /** Drops the owner's manager; the next turn rebuilds it from the store. */
@@ -149,7 +162,8 @@ public class UserMcpRegistry implements AutoCloseable {
                 Duration.ofSeconds(properties.defaultTimeoutSeconds()),
                 properties.outputLimit(),
                 Duration.ofSeconds(properties.refreshSeconds()));
-        manager.start();
+        // Background warm-up: listing connection states must never wait on handshakes.
+        manager.startAsync();
         return manager;
     }
 

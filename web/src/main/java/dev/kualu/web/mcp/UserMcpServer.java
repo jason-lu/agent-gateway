@@ -1,6 +1,7 @@
 package dev.kualu.web.mcp;
 
 import dev.kualu.mcp.McpServerConfig;
+import dev.kualu.mcp.StreamableHttpTransport;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -55,6 +56,12 @@ public record UserMcpServer(
         } else if (TRANSPORT_HTTP.equals(transport)) {
             if (url == null || url.isBlank()) {
                 throw new IllegalArgumentException("http server '" + name + "' needs a url");
+            }
+            try {
+                StreamableHttpTransport.requireTrustedUrl(url);
+            } catch (IllegalArgumentException ex) {
+                throw new IllegalArgumentException(
+                        "http server '" + name + "' must use an https url (loopback excepted): " + url);
             }
         } else {
             throw new IllegalArgumentException("transport must be 'stdio' or 'http' (was '" + transport + "')");

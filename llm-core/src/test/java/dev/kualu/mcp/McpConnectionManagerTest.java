@@ -36,6 +36,18 @@ class McpConnectionManagerTest {
     }
 
     @Test
+    void startAsyncConnectsInTheBackground() {
+        AtomicReference<List<String>> toolNames = new AtomicReference<>(List.of("navigate"));
+        List<FakeMcpTransport> created = new CopyOnWriteArrayList<>();
+        try (McpConnectionManager manager = manager(created, toolNames,
+                List.of(McpServerConfig.stdio("playwright", List.of("cmd"), null)))) {
+            manager.startAsync();
+            assertTrue(manager.awaitInitialConnect(Duration.ofSeconds(5)));
+            assertEquals(List.of("mcp_playwright_navigate"), names(manager.tools()));
+        }
+    }
+
+    @Test
     void toolCallsRouteToTheServerSession() {
         List<FakeMcpTransport> created = new CopyOnWriteArrayList<>();
         try (McpConnectionManager manager = manager(created, new AtomicReference<>(List.of("echo")),

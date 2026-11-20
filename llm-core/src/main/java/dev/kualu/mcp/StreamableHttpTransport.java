@@ -47,9 +47,10 @@ public final class StreamableHttpTransport implements McpTransport {
 
     /**
      * Remote servers must use HTTPS so credentials never cross the network in
-     * plaintext; loopback is the single exception (local development).
+     * plaintext; loopback is the single exception (local development). Public so
+     * config layers can reject a bad URL at save time, not just at connect time.
      */
-    static String requireTrustedUrl(String url) {
+    public static String requireTrustedUrl(String url) {
         URI uri = URI.create(url);
         String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
         if ("https".equals(scheme)) {

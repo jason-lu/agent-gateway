@@ -36,6 +36,23 @@ class UserMcpServerTest {
     }
 
     @Test
+    void httpServersMustUseHttpsExceptLoopback() {
+        // Remote plain http is rejected at validation, not just at connect time.
+        assertThatThrownBy(() -> new UserMcpServer(
+                "moji", UserMcpServer.TRANSPORT_HTTP, null, List.of(), Map.of(),
+                "http://mcp.example.com/mcp", Map.of(), true).validate())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("https");
+        // Loopback http stays legal for local development.
+        new UserMcpServer(
+                "local", UserMcpServer.TRANSPORT_HTTP, null, List.of(), Map.of(),
+                "http://127.0.0.1:3000/mcp", Map.of(), true).validate();
+        new UserMcpServer(
+                "local", UserMcpServer.TRANSPORT_HTTP, null, List.of(), Map.of(),
+                "http://localhost:3000/mcp", Map.of(), true).validate();
+    }
+
+    @Test
     void validateRejectsBadShapes() {
         assertThatThrownBy(() -> new UserMcpServer(
                 "bad name", UserMcpServer.TRANSPORT_HTTP, null, List.of(), Map.of(),

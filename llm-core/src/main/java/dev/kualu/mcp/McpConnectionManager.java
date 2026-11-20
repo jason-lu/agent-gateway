@@ -20,6 +20,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -57,7 +59,15 @@ public final class McpConnectionManager implements AutoCloseable {
                 thread.setDaemon(true);
                 return thread;
             });
+    /** First connection attempts ({@link #startAsync}); retries stay on the scheduler. */
+    private final ExecutorService connectExecutor = Executors.newCachedThreadPool(runnable -> {
+        Thread thread = new Thread(runnable, "mcp-connect");
+        thread.setDaemon(true);
+        return thread;
+    });
     private final AtomicBoolean closed = new AtomicBoolean();
+    /** Counts down once per configured server's first connection attempt. */
+    private final CountDownLatch initialConnects;
 
     public McpConnectionManager(List<McpServerConfig> servers) {
         this(servers, DEFAULT_HANDSHAKE_TIMEOUT, DEFAULT_CALL_TIMEOUT, DEFAULT_OUTPUT_LIMIT,
@@ -101,6 +111,7 @@ public final class McpConnectionManager implements AutoCloseable {
                 throw new IllegalArgumentException("duplicate mcp server name: " + server.name());
             }
         }
+        this.initialConnects = new CountDownLatch(connections.size());
     }
 
     private McpTransport createTransport(McpServerConfig server) {
@@ -128,6 +139,37 @@ public final class McpConnectionManager implements AutoCloseable {
         for (ServerConnection connection : connections.values()) {
             connect(connection);
         }
+        schedulePeriodicRefresh();
+    }
+
+    /**
+     * Like {@link #start} but returns immediately: the first attempts run in the
+     * background (in parallel), so a caller that only needs connection states —
+     * the settings UI — never blocks on a handshake. Use
+     * {@link #awaitInitialConnect} where the tool list must be complete.
+     */
+    public void startAsync() {
+        for (ServerConnection connection : connections.values()) {
+            connectExecutor.execute(() -> connect(connection));
+        }
+        schedulePeriodicRefresh();
+    }
+
+    /**
+     * Waits for every configured server's first connection attempt to settle.
+     *
+     * @return {@code true} when they all settled within the timeout
+     */
+    public boolean awaitInitialConnect(Duration timeout) {
+        try {
+            return initialConnects.await(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
+    private void schedulePeriodicRefresh() {
         if (!refreshInterval.isZero() && !refreshInterval.isNegative()) {
             long period = refreshInterval.toMillis();
             scheduler.scheduleAtFixedRate(this::refreshAll, period, period, TimeUnit.MILLISECONDS);
@@ -163,24 +205,28 @@ public final class McpConnectionManager implements AutoCloseable {
     }
 
     private void connect(ServerConnection connection) {
-        if (closed.get()) {
-            return;
-        }
         try {
-            McpSession session = new McpSession(transportFactory.apply(connection.config));
-            session.open(handshakeTimeout);
-            connection.attach(session);
-            session.onNotification("notifications/tools/list_changed",
-                    params -> refreshTools(connection));
-            session.onClose(() -> connectionDropped(connection));
-            refreshTools(connection);
-            log.info("mcp server connected: {} ({}), {} tool(s)",
-                    connection.config.name(), connection.config.transportLabel(), connection.tools.size());
-        } catch (RuntimeException ex) {
-            log.warn("mcp server {} unavailable: {}; retrying with backoff",
-                    connection.config.name(), ex.getMessage());
-            connection.markDown();
-            scheduleReconnect(connection);
+            if (closed.get()) {
+                return;
+            }
+            try {
+                McpSession session = new McpSession(transportFactory.apply(connection.config));
+                session.open(handshakeTimeout);
+                connection.attach(session);
+                session.onNotification("notifications/tools/list_changed",
+                        params -> refreshTools(connection));
+                session.onClose(() -> connectionDropped(connection));
+                refreshTools(connection);
+                log.info("mcp server connected: {} ({}), {} tool(s)",
+                        connection.config.name(), connection.config.transportLabel(), connection.tools.size());
+            } catch (RuntimeException ex) {
+                log.warn("mcp server {} unavailable: {}; retrying with backoff",
+                        connection.config.name(), ex.getMessage());
+                connection.markDown();
+                scheduleReconnect(connection);
+            }
+        } finally {
+            initialConnects.countDown();
         }
     }
 
@@ -257,6 +303,7 @@ public final class McpConnectionManager implements AutoCloseable {
             }
         }
         scheduler.shutdownNow();
+        connectExecutor.shutdownNow();
     }
 
     private final class ServerConnection {

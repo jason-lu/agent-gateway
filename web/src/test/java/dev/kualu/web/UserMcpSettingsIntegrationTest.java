@@ -77,6 +77,22 @@ class UserMcpSettingsIntegrationTest {
     }
 
     @Test
+    void createRejectsInsecureRemoteUrls() throws Exception {
+        String token = login("alice");
+        var result = mockMvc.perform(post("/api/v1/settings/mcp-servers")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"name":"moji_weather","transport":"http","url":"http://mcp.example.com/mcp",
+                                 "headers":{},"env":{},"args":[],"enabled":true}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andReturn();
+        assertThat(result.getResponse().getContentAsString()).contains("https");
+        assertThat(store.find("alice", "moji_weather")).isEmpty();
+    }
+
+    @Test
     void maskedUpdateKeepsStoredValue() throws Exception {
         String token = login("alice");
         createStdio(token, "keep-one", "GITHUB_TOKEN", "original-secret");
