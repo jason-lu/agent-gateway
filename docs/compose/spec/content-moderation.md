@@ -220,7 +220,7 @@ create index agent_moderation_events_pending_idx
 | `agent.moderation.llm.enabled` | `AGENT_MODERATION_LLM_ENABLED` | `true` | L2 开关 |
 | `agent.moderation.llm.provider` | `AGENT_MODERATION_LLM_PROVIDER` | 空 | 分类用 provider id；空则按模型名模糊解析（同 `AGENT_MEMORY_SUMMARY_PROVIDER`） |
 | `agent.moderation.llm.model` | `AGENT_MODERATION_LLM_MODEL` | 空 → 退回 `AGENT_MEMORY_SUMMARY_MODEL` → 退回默认聊天模型 | 分类模型 ID，**优先填 flash 档**（如 `mimo-v2.6-flash`） |
-| `agent.moderation.llm.timeout-ms` | `AGENT_MODERATION_LLM_TIMEOUT_MS` | `800` | 超时降级 L1 |
+| `agent.moderation.llm.timeout-ms` | `AGENT_MODERATION_LLM_TIMEOUT_MS` | `800` | 内联分类的超时上限，超时降级 L1；`mode=flag` 下 L2 异步审计、不占请求路径，上限抬为 `max(timeout-ms, 20000)`（见 Journey log） |
 
 词表文件形状（**运营维护，不进源码**；仓库内只放示例骨架——**首版即按骨架上线，`mode=flag` 灰度**，审计数据回流迭代后再切 `block`）：
 
@@ -320,3 +320,4 @@ create index agent_moderation_events_pending_idx
 - **词表骨架放 llm-core 而非 web**：cli 与 web 共用 `classpath:moderation/lexicon.json`，放 web 的 resources 会让 cli 找不到默认词表。web/cli 都在 classpath 模式运行，跨模块资源可见。
 - **`ChatService` 的 moderation 空转路径**：`segmentGate` 在禁用时返回的 `SegmentGate` 构造即 NPE（moderator 为 null）——第一版测试抓到。现在禁用时直接旁路 gate、用裸 sink。教训：可选管线的"空对象"要么真做成空对象，要么在调用点显式旁路，不能只在构造器里 requireNonNull。
 - **SSE 测试的中文断言**：`MockHttpServletResponse.getContentAsString()` 默认 ISO-8859-1，中文断言全挂——改成 `new String(getContentAsByteArray(), UTF_8)`。既有 SSE 测试只断言 ASCII 所以从没暴露。
+- **L2 分类在 flag 模式下移出请求路径（2026-11-20 修订）**：线上日志 `moderation classifier timed out after PT0.8S` 刷屏——800ms 超时是按"内联在请求路径"的延迟预算设计的，而实际部署打不完一次分类调用（聊天 TTFT 实测 3–11s），L2 等于从未产出判决，只剩超时 WARN 与熔断。flag（灰度）模式下判决本来就只进审计表、不改处置，于是把 L2 改成 `moderation-audit` 单线程后台执行：L1 词表照旧内联（本地微秒级，命中当场落审计、短路 L2）；L1 放行的文本在 flag 模式下异步判、判决落地时补记审计；block 模式行为不变（判决决定处置，必须内联）。配套把 flag 模式的 L2 超时地板抬到 20s（`effectiveLlmTimeout`，配置更高时听配置）——异步路径不再受内联延迟预算约束，沿用 800ms 等于把分类器判死。`ContentModerator` 增加 `checkL1`/`checkL2` 拆分（`checkInput`/`checkOutput`/`checkSegment` 契约不变，cli 同步路径不动）。代价：flag 模式下 L2 审计行晚于回复落地（通常 1–3s），复核队列不受影响。

@@ -26,6 +26,27 @@ public final class ContentModerator {
         return check(text, Direction.INPUT, true);
     }
 
+    /**
+     * Lexicon-only check (L1): local and instant. Callers that take L2 off the
+     * request path run this first and only then hand the passed text to
+     * {@link #checkL2}.
+     */
+    public Optional<ModerationHit> checkL1(String text, Direction direction) {
+        return check(text, direction, false);
+    }
+
+    /**
+     * Classifier-only check (L2). Empty when the classifier is disabled. Only
+     * texts the lexicon passed belong here (same contract as {@link #checkInput}).
+     */
+    public Optional<ModerationHit> checkL2(String text, Direction direction) {
+        Objects.requireNonNull(text, "text");
+        if (classifier == null) {
+            return Optional.empty();
+        }
+        return classifier.check(text, direction);
+    }
+
     /** Full check (L1 + L2) for a complete model reply — the pre-persist gate. */
     public Optional<ModerationHit> checkOutput(String text) {
         return check(text, Direction.OUTPUT, true);
