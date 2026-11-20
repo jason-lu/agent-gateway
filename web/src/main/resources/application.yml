@@ -87,7 +87,16 @@ agent:
       enabled: ${AGENT_EXEC_ENABLED:true}
       timeout-seconds: ${AGENT_EXEC_TIMEOUT:60}
       output-limit: ${AGENT_EXEC_OUTPUT_LIMIT:8000}
+      # Legacy single-user working directory; ignored when workspaces-root is set.
       workdir: ${AGENT_EXEC_WORKDIR:}
+      # Per-user isolation root: every account gets <root>/<owner>/ as its workdir
+      # resolution root, with its own CLI config dirs (GH_CONFIG_DIR,
+      # CLOUDSDK_CONFIG, …) and its own credentials (settings → 工具凭据).
+      # Strongly recommended for any deployment with more than one user.
+      workspaces-root: ${AGENT_EXEC_WORKSPACES_ROOT:}
+      # Extra config-location env entries (or retargets of the built-in ones);
+      # values support the {workspace} placeholder.
+      config-env: {}
     websearch:
       # Web search through the Tavily API (the model's web_search tool). The tool
       # is registered only when enabled AND an API key is present.

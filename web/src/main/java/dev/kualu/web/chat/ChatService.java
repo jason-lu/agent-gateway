@@ -131,13 +131,17 @@ public class ChatService {
     }
 
     /**
-     * One turn's tool view: static beans (exec), the owner's own MCP tools, and the
+     * One turn's tool view: static beans (exec) bound to the owner via
+     * {@link AgentTool#forUser}, the owner's own MCP tools, and the
      * shared {@code mcp.json} tools — minus any shared server the owner redefines
      * under the same name. The owner's semantic-memory tools ride along when the
      * feature is on. Re-read every turn so tools can come and go.
      */
     private List<AgentTool> toolsFor(String owner) {
-        List<AgentTool> all = new ArrayList<>(staticTools);
+        List<AgentTool> all = new ArrayList<>(staticTools.size());
+        for (AgentTool tool : staticTools) {
+            all.add(tool.forUser(owner));
+        }
         all.addAll(semanticMemory.toolsFor(owner));
         Set<String> overridden = Set.of();
         UserMcpRegistry registry = userMcpRegistries.getIfAvailable();

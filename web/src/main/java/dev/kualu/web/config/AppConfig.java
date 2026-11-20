@@ -108,6 +108,12 @@ public class AppConfig {
 
     @Bean
     @ConditionalOnProperty(name = "agent.store", havingValue = "memory")
+    public dev.kualu.web.tools.UserToolEnvStore inMemoryUserToolEnvStore() {
+        return new dev.kualu.web.tools.InMemoryUserToolEnvStore();
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "agent.store", havingValue = "memory")
     public dev.kualu.web.llm.LlmProviderStore inMemoryLlmProviderStore() {
         return new dev.kualu.web.llm.InMemoryLlmProviderStore();
     }
@@ -285,16 +291,29 @@ public class AppConfig {
      */
     @Bean
     @ConditionalOnProperty(name = "agent.tools.exec.enabled", havingValue = "true", matchIfMissing = true)
-    public ExecTool execTool(ExecToolProperties properties) {
+    public ExecTool execTool(
+            ExecToolProperties properties,
+            dev.kualu.web.tools.UserToolEnvStore toolEnvStore) {
         String workdir = properties.workdir() == null || properties.workdir().isBlank()
                 ? null
                 : properties.workdir();
-        log.info("exec-tool configured: enabled=true, timeout={}s, output-limit={}, workdir={}",
-                properties.timeoutSeconds(), properties.outputLimit(), workdir == null ? "(inherited)" : workdir);
-        return new ExecTool(new ExecTool.Config(
+        ExecTool.Config config = new ExecTool.Config(
                 Duration.ofSeconds(properties.timeoutSeconds()),
                 properties.outputLimit(),
-                workdir == null ? null : Path.of(workdir)));
+                workdir == null ? null : Path.of(workdir));
+        String workspacesRoot = properties.workspacesRoot() == null || properties.workspacesRoot().isBlank()
+                ? null
+                : properties.workspacesRoot();
+        if (workspacesRoot == null) {
+            log.info("exec-tool configured: enabled=true, timeout={}s, output-limit={}, workdir={}",
+                    properties.timeoutSeconds(), properties.outputLimit(),
+                    workdir == null ? "(inherited)" : workdir);
+            return new ExecTool(config);
+        }
+        log.info("exec-tool configured: enabled=true, timeout={}s, output-limit={}, workspaces-root={}, config-env={}",
+                properties.timeoutSeconds(), properties.outputLimit(), workspacesRoot, properties.configEnv().keySet());
+        return new ExecTool(config,
+                new dev.kualu.web.tools.ExecScopeResolver(Path.of(workspacesRoot), toolEnvStore, properties.configEnv()));
     }
 
     /**

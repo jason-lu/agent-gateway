@@ -164,6 +164,17 @@ The model can run system commands through the `exec` tool (OpenAI-style function
 - At most 8 model calls run per user turn. Unknown tool names and failing tools are returned to the model as error text instead of aborting the turn.
 - Disable with `AGENT_EXEC_ENABLED=false` (CLI) or `agent.tools.exec.enabled=false` (web): requests then carry no tools at all.
 
+### Per-user workspaces and credentials (web)
+
+With `agent.tools.exec.workspaces-root` set (`AGENT_EXEC_WORKSPACES_ROOT`), every account gets its own workspace and its own execution environment — this is the mode to use for any deployment with more than one user:
+
+- **Workdir**: the `workdir` argument resolves inside `<root>/<owner>/` (created on demand). `..` segments and anything resolving outside the workspace are refused; absolute paths are accepted only when they stay inside it.
+- **CLI config isolation**: `GH_CONFIG_DIR`, `CLOUDSDK_CONFIG`, `AWS_*_FILE`, `GIT_CONFIG_GLOBAL`, `DOCKER_CONFIG`, `KUBECONFIG`, `AZURE_CONFIG_DIR`, `NPM_CONFIG_USERCONFIG` and the XDG four all point into the workspace, so `gh`/`gcloud`/`aws`/… config and cached credentials never cross users. Add or retarget entries via `agent.tools.exec.config-env` (values support `{workspace}`).
+- **Credentials**: each user binds their own secrets (e.g. `GH_TOKEN`) under 设置 → 工具凭据 (`/api/v1/settings/tool-env`). They are injected only into that user's runs — the shared process environment's `GH_TOKEN`/`GITHUB_TOKEN` and config-dir variables are stripped first, and a user with no token runs unauthenticated rather than falling back to a shared one. Values are also materialized to `<workspace>/.secrets/<KEY>` (private permissions) for file-based consumers such as `gcloud auth activate-service-account --key-file=.secrets/GCLOUD_SA_KEY`.
+- Keys are validated: upper-case env names only, and managed variables (`PATH`, `HOME`, the config dirs above, loader/interpreter overrides) cannot be set per user.
+
+This is application-level isolation: commands still run as the service OS user, so it separates workdirs, config and credentials (and makes audit attribution correct) but does not defend against a deliberately malicious command reading outside its workspace.
+
 > **Security note:** the exec tool lets the model run arbitrary commands on the host. Keep the service on localhost and disable the tool when the gateway is reachable by users who should not have shell access.
 
 ## Web search

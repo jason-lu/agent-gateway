@@ -106,6 +106,11 @@ public class PostgresConfig {
     }
 
     @Bean
+    public dev.kualu.web.tools.UserToolEnvStore userToolEnvStore(JdbcTemplate jdbc) {
+        return new dev.kualu.web.tools.PostgresUserToolEnvStore(jdbc);
+    }
+
+    @Bean
     public dev.kualu.web.llm.LlmProviderStore llmProviderStore(JdbcTemplate jdbc, ObjectMapper objectMapper) {
         return new dev.kualu.web.llm.PostgresLlmProviderStore(jdbc, objectMapper);
     }

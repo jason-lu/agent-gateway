@@ -23,4 +23,13 @@ public interface AgentTool {
      * returns the text placed in the {@code tool} result message.
      */
     String execute(String argumentsJson);
+
+    /**
+     * Returns the view of this tool for one authenticated owner. Tools that carry
+     * per-user state (workdir, credentials) override this; stateless tools are
+     * shared as-is. Called once per turn from the tool list assembly.
+     */
+    default AgentTool forUser(String owner) {
+        return this;
+    }
 }
