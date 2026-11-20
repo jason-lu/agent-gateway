@@ -4,6 +4,7 @@ import dev.kualu.llm.AgentTool;
 import dev.kualu.mcp.McpConnectionManager;
 import dev.kualu.mcp.McpServerConfig;
 import dev.kualu.web.config.McpProperties;
+import dev.kualu.web.tools.UserToolEnvStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -22,7 +23,9 @@ import java.util.concurrent.TimeUnit;
  * Per-owner MCP connection managers. Each user's own server set — credentials
  * included — lives in its own connection pool, so one user's tools never appear in
  * another user's turn. Managers connect lazily on first use, are rebuilt when the
- * user edits their config, and are closed after an idle period.
+ * user edits their config, and are closed after an idle period. A user who binds
+ * a {@code GH_TOKEN} tool credential and defines no personal {@code github} server
+ * gets one synthesized from it ({@link GitHubMcp}).
  */
 public class UserMcpRegistry implements AutoCloseable {
 
@@ -35,6 +38,7 @@ public class UserMcpRegistry implements AutoCloseable {
     private static final Duration SWEEP_INTERVAL = Duration.ofMinutes(5);
 
     private final UserMcpServerStore store;
+    private final UserToolEnvStore toolEnvStore;
     private final McpProperties properties;
     private final Map<String, Entry> byOwner = new ConcurrentHashMap<>();
     private final ScheduledExecutorService sweeper =
@@ -44,8 +48,9 @@ public class UserMcpRegistry implements AutoCloseable {
                 return thread;
             });
 
-    public UserMcpRegistry(UserMcpServerStore store, McpProperties properties) {
+    public UserMcpRegistry(UserMcpServerStore store, UserToolEnvStore toolEnvStore, McpProperties properties) {
         this.store = store;
+        this.toolEnvStore = toolEnvStore;
         this.properties = properties;
         long period = SWEEP_INTERVAL.toMillis();
         sweeper.scheduleAtFixedRate(this::evictIdle, period, period, TimeUnit.MILLISECONDS);
@@ -102,7 +107,7 @@ public class UserMcpRegistry implements AutoCloseable {
     }
 
     private Entry entryFor(String owner) {
-        List<UserMcpServer> config = store.listByOwner(owner);
+        List<UserMcpServer> config = effectiveConfig(owner);
         Entry current = byOwner.get(owner);
         if (current != null && current.config.equals(config)) {
             return current;
@@ -113,6 +118,22 @@ public class UserMcpRegistry implements AutoCloseable {
             previous.manager.close();
         }
         return rebuilt;
+    }
+
+    /**
+     * Stored servers plus the synthesized GitHub server when the owner binds a
+     * token. Part of the cache key: rotating the token rebuilds the manager.
+     * Package-private for tests.
+     */
+    List<UserMcpServer> effectiveConfig(String owner) {
+        List<UserMcpServer> stored = store.listByOwner(owner);
+        Set<String> defined = new HashSet<>();
+        for (UserMcpServer server : stored) {
+            defined.add(server.name());
+        }
+        List<UserMcpServer> config = new ArrayList<>(stored);
+        GitHubMcp.synthesize(toolEnvStore.listByOwner(owner), defined).ifPresent(config::add);
+        return config;
     }
 
     private McpConnectionManager newManager(List<UserMcpServer> config) {

@@ -404,8 +404,10 @@ public class AppConfig {
     @Bean(destroyMethod = "close")
     @ConditionalOnProperty(name = "agent.tools.mcp.enabled", havingValue = "true", matchIfMissing = true)
     public dev.kualu.web.mcp.UserMcpRegistry userMcpRegistry(
-            dev.kualu.web.mcp.UserMcpServerStore store, McpProperties properties) {
-        return new dev.kualu.web.mcp.UserMcpRegistry(store, properties);
+            dev.kualu.web.mcp.UserMcpServerStore store,
+            dev.kualu.web.tools.UserToolEnvStore toolEnvStore,
+            McpProperties properties) {
+        return new dev.kualu.web.mcp.UserMcpRegistry(store, toolEnvStore, properties);
     }
 
     /** Inline yml entry; values are already placeholder-resolved by Spring. */
