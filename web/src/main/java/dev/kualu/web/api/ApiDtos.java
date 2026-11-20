@@ -172,6 +172,10 @@ public final class ApiDtos {
     public record InviteCodeBody(String email, String note, Integer validDays) {
     }
 
+    /** The address an invite code would bind to the new account at registration. */
+    public record InvitePreviewResponse(String email) {
+    }
+
     public record ErrorResponse(int status, String error, String message) {
     }
 

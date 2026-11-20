@@ -56,6 +56,11 @@ public class PostgresRefreshTokenStore implements RefreshTokenStore {
         jdbc.update("delete from agent.refresh_tokens where id = ?", UUID.fromString(id));
     }
 
+    @Override
+    public void deleteAllFor(String username) {
+        jdbc.update("delete from agent.refresh_tokens where owner = ?", username);
+    }
+
     private Optional<Entry> first(String sql, Object arg) {
         List<Entry> rows = jdbc.query(sql,
                 (rs, rowNum) -> new Entry(

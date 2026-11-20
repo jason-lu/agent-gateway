@@ -144,6 +144,12 @@ public class AppConfig {
 
     @Bean
     @ConditionalOnProperty(name = "agent.store", havingValue = "memory")
+    public dev.kualu.web.auth.PasswordResetTokenStore inMemoryPasswordResetTokenStore() {
+        return new dev.kualu.web.auth.InMemoryPasswordResetTokenStore();
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "agent.store", havingValue = "memory")
     public dev.kualu.web.moderation.ModerationEventStore inMemoryModerationEventStore() {
         return new dev.kualu.web.moderation.InMemoryModerationEventStore();
     }
@@ -171,6 +177,18 @@ public class AppConfig {
     public dev.kualu.web.invite.InviteCodeService inviteCodeService(
             dev.kualu.web.invite.InviteCodeStore store, dev.kualu.web.email.EmailService emailService) {
         return new dev.kualu.web.invite.InviteCodeService(store, emailService);
+    }
+
+    @Bean
+    public dev.kualu.web.auth.PasswordResetService passwordResetService(
+            dev.kualu.web.auth.UserAccountStore accounts,
+            dev.kualu.web.auth.UserPasswordStore passwords,
+            dev.kualu.web.auth.PasswordResetTokenStore tokens,
+            dev.kualu.web.auth.RefreshTokenStore sessions,
+            dev.kualu.web.email.EmailService emailService,
+            SecurityProperties properties) {
+        return new dev.kualu.web.auth.PasswordResetService(
+                accounts, passwords, tokens, sessions, emailService, properties.resetBaseUrl());
     }
 
     /**
@@ -208,6 +226,9 @@ public class AppConfig {
                                 "/api/v1/auth/refresh",
                                 "/api/v1/auth/logout",
                                 "/api/v1/auth/register",
+                                "/api/v1/auth/invite-preview",
+                                "/api/v1/auth/forgot-password",
+                                "/api/v1/auth/reset-password",
                                 "/api/v1/health",
                                 "/actuator/health")
                         .permitAll()

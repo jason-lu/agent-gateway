@@ -1,9 +1,13 @@
 package dev.kualu.web.api;
 
+import dev.kualu.web.api.ApiDtos.InvitePreviewResponse;
 import dev.kualu.web.api.ApiDtos.LoginResponse;
+import dev.kualu.web.auth.PasswordResetException;
+import dev.kualu.web.auth.PasswordResetService;
 import dev.kualu.web.auth.RefreshTokenService;
 import dev.kualu.web.auth.UserAccountStore;
 import dev.kualu.web.auth.UserPasswordStore;
+import dev.kualu.web.invite.InviteCode;
 import dev.kualu.web.invite.InviteCodeException;
 import dev.kualu.web.invite.InviteCodeService;
 import jakarta.validation.Valid;
@@ -37,6 +41,7 @@ public class AuthController {
     private final RefreshTokenService refreshTokenService;
     private final UserAccountStore accountStore;
     private final InviteCodeService inviteCodes;
+    private final PasswordResetService passwordResets;
 
     public AuthController(
             AuthenticationManager authenticationManager,
@@ -45,7 +50,8 @@ public class AuthController {
             UserPasswordStore passwordStore,
             RefreshTokenService refreshTokenService,
             UserAccountStore accountStore,
-            InviteCodeService inviteCodes) {
+            InviteCodeService inviteCodes,
+            PasswordResetService passwordResets) {
         this.authenticationManager = authenticationManager;
         this.userDetailsService = userDetailsService;
         this.passwordEncoder = passwordEncoder;
@@ -53,6 +59,7 @@ public class AuthController {
         this.refreshTokenService = refreshTokenService;
         this.accountStore = accountStore;
         this.inviteCodes = inviteCodes;
+        this.passwordResets = passwordResets;
     }
 
     @PostMapping("/login")
@@ -67,7 +74,8 @@ public class AuthController {
     }
 
     /**
-     * Invite-based registration: the code is claimed exactly once and the new
+     * Invite-based registration: the code is claimed exactly once, its email is
+     * bound to the new account (the forgot-password flow mails there), and the
      * account starts with the {@code USER} role. The response is a full login
      * pair, so the client can sign in immediately.
      */
@@ -77,17 +85,32 @@ public class AuthController {
         if (accountStore.exists(username)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "用户名已存在");
         }
+        InviteCode invite;
         try {
-            inviteCodes.consume(body.inviteCode(), username);
+            invite = inviteCodes.consume(body.inviteCode(), username);
         } catch (InviteCodeException ex) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
         }
         try {
-            accountStore.create(username, passwordEncoder.encode(body.password()));
+            accountStore.create(username, passwordEncoder.encode(body.password()), invite.email());
         } catch (IllegalArgumentException ex) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "用户名已存在");
         }
         return issue(userDetailsService.loadUserByUsername(username));
+    }
+
+    /**
+     * The address an unused code would bind at registration, so the register form
+     * can show it before the code is consumed. Unknown, used and expired codes
+     * answer with the same message {@link #register} would return.
+     */
+    @PostMapping("/invite-preview")
+    public InvitePreviewResponse invitePreview(@Valid @RequestBody InvitePreviewBody body) {
+        try {
+            return new InvitePreviewResponse(inviteCodes.preview(body.inviteCode()).email());
+        } catch (InviteCodeException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
+        }
     }
 
     /**
@@ -125,6 +148,29 @@ public class AuthController {
         passwordStore.updatePassword(username, passwordEncoder.encode(body.newPassword()));
     }
 
+    /**
+     * Starts the forgot-password flow: mails a single-use reset token to the
+     * address bound to the account. Unknown accounts and accounts without a bound
+     * address get the same {@code 204} as a delivered mail, so the endpoint cannot
+     * be used to probe which usernames exist.
+     */
+    @PostMapping("/forgot-password")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void forgotPassword(@Valid @RequestBody ForgotPasswordBody body) {
+        passwordResets.requestReset(body.username().trim());
+    }
+
+    /** Replaces the password behind a reset token and revokes every login session. */
+    @PostMapping("/reset-password")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void resetPassword(@Valid @RequestBody ResetPasswordBody body) {
+        try {
+            passwordResets.resetPassword(body.token().trim(), passwordEncoder.encode(body.newPassword()));
+        } catch (PasswordResetException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
+        }
+    }
+
     private LoginResponse issue(UserDetails user) {
         List<String> roles = user.getAuthorities().stream()
                 .map(authority -> authority.getAuthority().replaceFirst("^ROLE_", ""))
@@ -146,6 +192,17 @@ public class AuthController {
             @NotBlank String inviteCode,
             @NotBlank @Size(min = 2, max = 64) String username,
             @NotBlank @Size(min = 8, max = 128) String password) {
+    }
+
+    public record InvitePreviewBody(@NotBlank String inviteCode) {
+    }
+
+    public record ForgotPasswordBody(@NotBlank String username) {
+    }
+
+    public record ResetPasswordBody(
+            @NotBlank String token,
+            @NotBlank @Size(min = 8, max = 128) String newPassword) {
     }
 
     public record RefreshRequest(

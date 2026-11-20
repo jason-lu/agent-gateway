@@ -26,7 +26,7 @@ class RefreshTokenServiceTest {
     void setUp() {
         store = new InMemoryRefreshTokenStore();
         SecurityProperties properties =
-                new SecurityProperties(SECRET, Duration.ofHours(2), Duration.ofMillis(120), List.of());
+                new SecurityProperties(SECRET, Duration.ofHours(2), Duration.ofMillis(120), "", List.of());
         jwtService = new JwtService(properties);
         UserDetails alice = User.withUsername("alice").password("x").roles("USER").build();
         UserDetailsService users = new UserDetailsService() {

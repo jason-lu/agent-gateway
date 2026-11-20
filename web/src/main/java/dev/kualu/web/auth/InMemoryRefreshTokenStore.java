@@ -62,4 +62,13 @@ public class InMemoryRefreshTokenStore implements RefreshTokenStore {
             idByHash.remove(removed.tokenHash());
         }
     }
+
+    @Override
+    public void deleteAllFor(String username) {
+        for (Row row : byId.values()) {
+            if (row.owner().equals(username)) {
+                deleteById(row.id());
+            }
+        }
+    }
 }

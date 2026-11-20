@@ -136,6 +136,10 @@ agent:
     # A session dies after this long without any authenticated request (idle),
     # regardless of the access-token expiry. Refreshing counts as activity.
     refresh-idle-timeout: ${AGENT_REFRESH_IDLE_TIMEOUT:24h}
+    # Public base URL of the web UI, used to build the clickable link in
+    # forgot-password mails (e.g. https://assistant.example.com). Unset keeps the
+    # mail to the paste-able token only.
+    reset-base-url: ${AGENT_RESET_BASE_URL:}
     users:
       - username: ${AGENT_ADMIN_USERNAME:admin}
         password: ${AGENT_ADMIN_PASSWORD:change-me}

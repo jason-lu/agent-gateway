@@ -126,6 +126,11 @@ public class PostgresConfig {
     }
 
     @Bean
+    public dev.kualu.web.auth.PasswordResetTokenStore passwordResetTokenStore(JdbcTemplate jdbc) {
+        return new dev.kualu.web.auth.PostgresPasswordResetTokenStore(jdbc);
+    }
+
+    @Bean
     public dev.kualu.web.email.EmailSettingsStore emailSettingsStore(JdbcTemplate jdbc) {
         return new dev.kualu.web.email.PostgresEmailSettingsStore(jdbc);
     }

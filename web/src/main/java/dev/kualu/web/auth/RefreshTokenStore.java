@@ -27,4 +27,7 @@ public interface RefreshTokenStore {
     boolean touch(String id, Instant usedAt);
 
     void deleteById(String id);
+
+    /** Drops every session belonging to the account (password reset revokes them all). */
+    void deleteAllFor(String username);
 }

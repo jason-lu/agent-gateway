@@ -1,5 +1,6 @@
 package dev.kualu.web;
 
+import dev.kualu.web.auth.UserAccountStore;
 import dev.kualu.web.invite.InviteCode;
 import dev.kualu.web.invite.InviteCodeStore;
 import org.junit.jupiter.api.Test;
@@ -43,6 +44,9 @@ class InviteRegistrationIntegrationTest {
     @Autowired
     private InviteCodeStore inviteStore;
 
+    @Autowired
+    private UserAccountStore accountStore;
+
     @Test
     void registerRejectsUnknownOrMissingCode() throws Exception {
         mockMvc.perform(post("/api/v1/auth/register")
@@ -78,6 +82,9 @@ class InviteRegistrationIntegrationTest {
         String code = createInvite("carol@example.com", "carol");
         String token = register(code, "carol", "password123");
         assertThat(token).isNotBlank();
+
+        // The invite's email is bound to the new account (the forgot-password mailbox).
+        assertThat(accountStore.findEmail("carol")).contains("carol@example.com");
 
         // The account is a real USER and can call authenticated endpoints.
         mockMvc.perform(get("/api/v1/sessions")
@@ -122,6 +129,26 @@ class InviteRegistrationIntegrationTest {
                                 """.formatted(second)))
                 .andExpect(status().isConflict());
         assertThat(inviteStore.find(second).orElseThrow().used()).isFalse();
+    }
+
+    @Test
+    void invitePreviewShowsTheBoundEmail() throws Exception {
+        String code = createInvite("preview@example.com", null);
+        mockMvc.perform(post("/api/v1/auth/invite-preview")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"inviteCode":"%s"}
+                                """.formatted(code)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.email").value("preview@example.com"));
+
+        register(code, "peggy", "password123");
+        mockMvc.perform(post("/api/v1/auth/invite-preview")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"inviteCode":"%s"}
+                                """.formatted(code)))
+                .andExpect(status().isBadRequest());
     }
 
     @Test

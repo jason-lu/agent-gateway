@@ -77,21 +77,31 @@ public class InviteCodeService {
     }
 
     /**
+     * The code a registration would consume, without consuming it — its email is
+     * what registration binds to the new account.
+     *
+     * @throws InviteCodeException when unknown, used or expired
+     */
+    public InviteCode preview(String code) {
+        InviteCode invite = store.find(code == null ? "" : code.trim())
+                .orElseThrow(() -> new InviteCodeException("邀请码无效"));
+        if (invite.used()) {
+            throw new InviteCodeException("邀请码已被使用");
+        }
+        if (invite.expired(Instant.now())) {
+            throw new InviteCodeException("邀请码已过期");
+        }
+        return invite;
+    }
+
+    /**
      * Validates and claims the code for {@code username}.
      *
      * @throws InviteCodeException when unknown, used or expired
      */
     public InviteCode consume(String code, String username) {
-        InviteCode invite = store.find(code == null ? "" : code.trim())
-                .orElseThrow(() -> new InviteCodeException("邀请码无效"));
-        Instant now = Instant.now();
-        if (invite.used()) {
-            throw new InviteCodeException("邀请码已被使用");
-        }
-        if (invite.expired(now)) {
-            throw new InviteCodeException("邀请码已过期");
-        }
-        if (!store.markUsed(invite.code(), username, now)) {
+        InviteCode invite = preview(code);
+        if (!store.markUsed(invite.code(), username, Instant.now())) {
             throw new InviteCodeException("邀请码已被使用");
         }
         return invite;

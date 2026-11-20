@@ -11,11 +11,13 @@ public record SecurityProperties(
         String jwtSecret,
         Duration jwtTtl,
         Duration refreshIdleTimeout,
+        String resetBaseUrl,
         List<User> users
 ) {
 
     public SecurityProperties {
         refreshIdleTimeout = refreshIdleTimeout == null ? Duration.ofHours(24) : refreshIdleTimeout;
+        resetBaseUrl = resetBaseUrl == null ? "" : resetBaseUrl.trim();
         users = users == null ? new ArrayList<>() : List.copyOf(users);
     }
 

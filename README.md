@@ -40,6 +40,7 @@ Every user picks a concrete model in the chat window (`GET /api/v1/llm/models` l
 | JWT secret | `AGENT_JWT_SECRET` | — | `agent.security.jwt-secret` (min 32 chars, required to start web) |
 | JWT TTL | `AGENT_JWT_TTL` | — | `agent.security.jwt-ttl` (default `2h`, access-token lifetime) |
 | Idle timeout | `AGENT_REFRESH_IDLE_TIMEOUT` | — | `agent.security.refresh-idle-timeout` (default `24h`) |
+| Reset-link base URL | `AGENT_RESET_BASE_URL` | — | `agent.security.reset-base-url` (public web-UI URL for forgot-password mails; unset keeps the token paste-able only) |
 | Admin user | `AGENT_ADMIN_USERNAME` / `AGENT_ADMIN_PASSWORD` | — | `agent.security.users` (first-start seed only) |
 | Persistence backend | `AGENT_STORE` | — | `agent.store` (default `postgres`, or `memory`) |
 | Database URL | `AGENT_DB_URL` | — | `agent.db.url` (must set `sslmode`) |
@@ -291,6 +292,8 @@ curl -s -X POST http://127.0.0.1:8080/api/v1/auth/change-password \
 
 New passwords need at least 8 characters; a wrong `currentPassword` is `400`. The current session keeps working until it goes idle (`agent.security.refresh-idle-timeout`) or is revoked with `POST /api/v1/auth/logout` — only future logins use the new password. With `agent.store=memory` the change lasts until restart; with `agent.store=postgres` it is written to `agent.users` and survives restarts.
 
+Forgot password (no session needed): `POST /api/v1/auth/forgot-password` with `{"username":"..."}` mails a single-use reset token to the address bound to that account — registration copies it from the invite code — and `POST /api/v1/auth/reset-password` with `{"token":"...","newPassword":"..."}` sets the new password and revokes every login session of that account. Tokens expire after 30 minutes; the endpoint answers `204` whether or not the account exists. Set `AGENT_RESET_BASE_URL` to the public web-UI URL so the mail carries a clickable link; otherwise the mail shows the token for manual entry on the reset page. Accounts without a bound address (config-seeded ones) are not reachable this way.
+
 ### API
 
 | Method | Path | Auth | Description |
@@ -299,6 +302,10 @@ New passwords need at least 8 characters; a wrong `currentPassword` is `400`. Th
 | POST | `/api/v1/auth/login` | public | Issue access + refresh token pair |
 | POST | `/api/v1/auth/refresh` | public | `{refreshToken}` → rotated pair (401 when idle/unknown) |
 | POST | `/api/v1/auth/logout` | public | `{refreshToken}` → `204`, revokes the session |
+| POST | `/api/v1/auth/register` | public | Invite-code registration `{inviteCode, username, password}` → login pair; binds the invite's email to the account |
+| POST | `/api/v1/auth/invite-preview` | public | `{inviteCode}` → `{email}` the code would bind at registration |
+| POST | `/api/v1/auth/forgot-password` | public | `{username}` → `204`; mails a single-use reset token to the bound address (same `204` for unknown accounts) |
+| POST | `/api/v1/auth/reset-password` | public | `{token, newPassword}` → `204`; replaces the password and revokes every session |
 | POST | `/api/v1/auth/change-password` | USER | `{currentPassword, newPassword}` → `204` |
 | GET | `/api/v1/sessions` | USER | List your sessions |
 | POST | `/api/v1/sessions` | USER | Create session `{systemPrompt?}` |
@@ -346,7 +353,7 @@ By default (`agent.store=postgres`) users and conversations live in PostgreSQL:
 
 | Table | Holds |
 |---|---|
-| `agent.users` | `username`, bcrypt `password_hash`, `roles text[]` |
+| `agent.users` | `username`, bcrypt `password_hash`, `roles text[]`, `email` (bound from the invite code) |
 | `agent.sessions` | `id`, `owner` (FK to users), `created_at`, `messages jsonb` |
 | `agent.session_images` | `session_id`, `image_id` (SHA-256 of content), `content` — externalised `data:` images |
 
