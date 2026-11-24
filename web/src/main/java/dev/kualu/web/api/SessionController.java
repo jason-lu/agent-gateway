@@ -181,7 +181,7 @@ public class SessionController {
         try {
             Session session = requireSession(username, id);
             String reply = chatService.chat(session, body.content(), body.images(), body.providerId(), body.model());
-            return new MessageResponse(reply);
+            return new MessageResponse(reply, timings.tokenUsage());
         } finally {
             turnMetrics.complete("send", id, timings);
             TurnTimings.clear();
@@ -215,7 +215,7 @@ public class SessionController {
                         throw new IllegalStateException("SSE send failed", ex);
                     }
                 });
-                emitter.send(SseEmitter.event().name("done").data(new SseDone(reply)));
+                emitter.send(SseEmitter.event().name("done").data(new SseDone(reply, timings.tokenUsage())));
                 emitter.complete();
             } catch (dev.kualu.llm.moderation.ModerationBlockedException ex) {
                 // Content moderation refused the turn: a structured event for the
@@ -227,7 +227,8 @@ public class SessionController {
                             "blocked", ex.hit().category().name(), ex.direction().name())));
                     if (ex.direction() == dev.kualu.llm.moderation.Direction.OUTPUT) {
                         emitter.send(SseEmitter.event().name("done")
-                                .data(new SseDone(dev.kualu.llm.moderation.ModerationMessages.OUTPUT_REFUSAL)));
+                                .data(new SseDone(dev.kualu.llm.moderation.ModerationMessages.OUTPUT_REFUSAL,
+                                        timings.tokenUsage())));
                     } else {
                         emitter.send(SseEmitter.event().name("error")
                                 .data(new SseError(dev.kualu.llm.moderation.ModerationMessages.BLOCK_MESSAGE)));

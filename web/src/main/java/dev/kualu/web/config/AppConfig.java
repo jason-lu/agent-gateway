@@ -293,16 +293,16 @@ public class AppConfig {
             log.info("memory-compress configured: enabled=false");
             return null;
         }
-        log.info("memory-compress configured: enabled=true, max-messages={}, keep-messages={}, max-summary-chars={},"
+        log.info("memory-compress configured: enabled=true, max-tokens={}, keep-tokens={}, max-summary-chars={},"
                         + " summary-provider={}, summary-model={}",
-                properties.maxMessages(), properties.keepMessages(), properties.maxSummaryChars(),
+                properties.maxTokens(), properties.keepTokens(), properties.maxSummaryChars(),
                 properties.summaryProvider(), properties.summaryModel());
         return new MemoryCompressor(
                 () -> {
                     LlmClient summary = llmSettings.clientForModel(properties.summaryProvider(), properties.summaryModel());
                     return summary != null ? summary : llmSettings.defaultClient();
                 },
-                properties.maxMessages(), properties.keepMessages(), properties.instruction(),
+                properties.maxTokens(), properties.keepTokens(), properties.instruction(),
                 properties.maxSummaryChars());
     }
 

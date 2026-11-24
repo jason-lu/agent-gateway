@@ -48,6 +48,9 @@ public final class MemoryCompressor {
     static final int MAX_TURN_CHARS = 2000;
     static final int MAX_TOOL_CHARS = 240;
 
+    /** Rough token weight of one image in a vision turn (a typical VLM tile count). */
+    static final int IMAGE_TOKENS = 850;
+
     /** Name of the classpath resource holding the built-in instruction. */
     static final String DEFAULT_INSTRUCTION_RESOURCE = "summarize-instruction.txt";
 
@@ -70,39 +73,39 @@ public final class MemoryCompressor {
     private static final Logger log = LoggerFactory.getLogger(MemoryCompressor.class);
 
     private final Supplier<LlmClient> llm;
-    private final int maxMessages;
-    private final int keepMessages;
+    private final int maxTokens;
+    private final int keepTokens;
     private final String instruction;
     private final int maxSummaryChars;
 
     /**
      * @param llm             supplier of the client used for the summarisation call;
      *                        resolved per call so a runtime config change is picked up
-     * @param maxMessages     trigger threshold, counted over the context sent to
-     *                        the model (system + summary + verbatim tail)
-     * @param keepMessages    how many recent turns survive verbatim after compression
+     * @param maxTokens       trigger threshold: the context's token occupancy
+     *                        (see {@link #contextTokens(ConversationMemory)}); the
+     *                        fold runs once a turn pushes the context past it
+     * @param keepTokens      token budget for the verbatim tail kept after compression
      * @param instruction     summarisation instruction; {@code null} or blank uses
      *                        {@link #DEFAULT_INSTRUCTION}
      * @param maxSummaryChars hard cap on the stored summary body; longer output is
      *                        truncated so the request payload stays bounded
      * @throws IllegalArgumentException if the thresholds cannot yield a bounded history
      */
-    public MemoryCompressor(Supplier<LlmClient> llm, int maxMessages, int keepMessages, String instruction,
+    public MemoryCompressor(Supplier<LlmClient> llm, int maxTokens, int keepTokens, String instruction,
             int maxSummaryChars) {
         this.llm = Objects.requireNonNull(llm, "llm");
-        if (keepMessages < 2) {
-            throw new IllegalArgumentException("keepMessages must be >= 2 (got " + keepMessages + ")");
+        if (keepTokens < 1) {
+            throw new IllegalArgumentException("keepTokens must be >= 1 (got " + keepTokens + ")");
         }
-        if (maxMessages <= keepMessages + 2) {
+        if (maxTokens <= keepTokens) {
             throw new IllegalArgumentException(
-                    "maxMessages must be > keepMessages + 2 (got " + maxMessages
-                            + ", keepMessages " + keepMessages + ")");
+                    "maxTokens must be > keepTokens (got " + maxTokens + ", keepTokens " + keepTokens + ")");
         }
         if (maxSummaryChars <= 0) {
             throw new IllegalArgumentException("maxSummaryChars must be > 0 (got " + maxSummaryChars + ")");
         }
-        this.maxMessages = maxMessages;
-        this.keepMessages = keepMessages;
+        this.maxTokens = maxTokens;
+        this.keepTokens = keepTokens;
         this.instruction = (instruction == null || instruction.isBlank())
                 ? DEFAULT_INSTRUCTION
                 : instruction;
@@ -110,9 +113,9 @@ public final class MemoryCompressor {
     }
 
     /** Convenience overload for a fixed client. */
-    public MemoryCompressor(LlmClient llm, int maxMessages, int keepMessages, String instruction,
+    public MemoryCompressor(LlmClient llm, int maxTokens, int keepTokens, String instruction,
             int maxSummaryChars) {
-        this(fixed(llm), maxMessages, keepMessages, instruction, maxSummaryChars);
+        this(fixed(llm), maxTokens, keepTokens, instruction, maxSummaryChars);
     }
 
     private static Supplier<LlmClient> fixed(LlmClient llm) {
@@ -142,10 +145,10 @@ public final class MemoryCompressor {
             int maxTokens) {
     }
 
-    /** Cheap check: does the context sent to the model exceed the threshold? */
+    /** Cheap check: does the context's token occupancy exceed the threshold? */
     public boolean shouldCompress(ConversationMemory memory) {
         Objects.requireNonNull(memory, "memory");
-        return contextSize(memory.messages()) > maxMessages;
+        return contextTokens(memory) > maxTokens;
     }
 
     /**
@@ -159,11 +162,23 @@ public final class MemoryCompressor {
         int summaryIndex = lastSummaryIndex(all);
         List<ChatMessage> tail = all.subList(summaryIndex >= 0 ? summaryIndex + 1 : systemIndex + 1, all.size());
 
-        if (contextSize(all) <= maxMessages) {
+        if (contextTokens(memory) <= maxTokens) {
             return null;
         }
 
-        int tailStartInTurns = tail.size() - keepMessages;
+        // Newest turns survive while they fit the keepTokens budget (the newest is
+        // always kept even alone over budget); then roll back to a user turn so a
+        // run is never split and a tool result is never orphaned.
+        int tailStartInTurns = tail.size();
+        int keptTokens = 0;
+        while (tailStartInTurns > 0) {
+            int cost = messageTokens(tail.get(tailStartInTurns - 1));
+            if (keptTokens + cost > keepTokens && tailStartInTurns < tail.size()) {
+                break;
+            }
+            keptTokens += cost;
+            tailStartInTurns--;
+        }
         while (tailStartInTurns > 0 && !"user".equals(tail.get(tailStartInTurns).role())) {
             tailStartInTurns--;
         }
@@ -232,8 +247,9 @@ public final class MemoryCompressor {
         int foldStart = plan.summaryIndex() >= 0 ? plan.summaryIndex() + 1
                 : (!all.isEmpty() && isSystem(all.get(0)) && !isSummary(all.get(0)) ? 1 : 0);
         int folded = plan.tailStartIndex() - foldStart;
-        log.info("{}: context {} -> {} (folded {} turns, summary {} chars, input {} chars)",
-                logPrefix(null), contextSize(all), contextSize(rebuilt), folded, summaryBody.length(),
+        log.info("{}: context {} msgs/~{} tok -> {} msgs/~{} tok (folded {} turns, summary {} chars, input {} chars)",
+                logPrefix(null), contextSize(all), estimateContextTokens(all),
+                contextSize(rebuilt), estimateContextTokens(rebuilt), folded, summaryBody.length(),
                 requestChars(plan));
         return true;
     }
@@ -282,6 +298,78 @@ public final class MemoryCompressor {
         int summaryIndex = lastSummaryIndex(all);
         int tail = all.size() - (summaryIndex >= 0 ? summaryIndex + 1 : systemIndex + 1);
         return (systemIndex >= 0 ? 1 : 0) + (summaryIndex >= 0 ? 1 : 0) + tail;
+    }
+
+    /**
+     * The context's token occupancy — the gauge this compressor triggers on.
+     * Prefers the newest assistant turn's measured {@code usage.promptTokens}
+     * (the whole request that call actually carried, request overhead included);
+     * falls back to a text estimate of the bounded context view when the
+     * upstream reports no usage (older sessions, silent providers).
+     */
+    static int contextTokens(ConversationMemory memory) {
+        List<ChatMessage> all = memory.messages();
+        for (int i = all.size() - 1; i >= 0; i--) {
+            ChatMessage message = all.get(i);
+            if ("assistant".equals(message.role())
+                    && message.usage() != null && message.usage().promptTokens() > 0) {
+                return message.usage().promptTokens();
+            }
+        }
+        return estimateContextTokens(all);
+    }
+
+    /** Estimated tokens of the context view (system + summary + verbatim tail) of {@code all}. */
+    static int estimateContextTokens(List<ChatMessage> all) {
+        int systemIndex = !all.isEmpty() && isSystem(all.get(0)) && !isSummary(all.get(0)) ? 0 : -1;
+        int summaryIndex = lastSummaryIndex(all);
+        int tokens = 0;
+        if (systemIndex >= 0) {
+            tokens += messageTokens(all.get(systemIndex));
+        }
+        if (summaryIndex >= 0) {
+            tokens += messageTokens(all.get(summaryIndex));
+        }
+        for (int i = (summaryIndex >= 0 ? summaryIndex + 1 : systemIndex + 1); i < all.size(); i++) {
+            tokens += messageTokens(all.get(i));
+        }
+        return tokens;
+    }
+
+    /** One message's estimated weight: text, tool-call arguments, and per-image tokens. */
+    static int messageTokens(ChatMessage message) {
+        int tokens = estimateTokens(message.content());
+        if (message.toolCalls() != null) {
+            for (ToolCall call : message.toolCalls()) {
+                tokens += estimateTokens(call.arguments());
+            }
+        }
+        if (message.images() != null) {
+            tokens += message.images().size() * IMAGE_TOKENS;
+        }
+        return tokens;
+    }
+
+    /**
+     * Rough token estimate for a chunk of text: CJK and other wide characters
+     * count about one token each, everything else about four characters per
+     * token. Not a tokenizer — just a stable pressure gauge for when the
+     * upstream reports no usage.
+     */
+    static int estimateTokens(String text) {
+        if (text == null || text.isEmpty()) {
+            return 0;
+        }
+        int wide = 0;
+        int other = 0;
+        for (int i = 0; i < text.length(); i++) {
+            if (text.charAt(i) >= 0x2E80) {
+                wide++;
+            } else {
+                other++;
+            }
+        }
+        return wide + (other + 3) / 4;
     }
 
     private static int lastSummaryIndex(List<ChatMessage> all) {

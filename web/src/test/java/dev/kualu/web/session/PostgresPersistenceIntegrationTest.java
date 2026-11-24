@@ -142,6 +142,23 @@ class PostgresPersistenceIntegrationTest {
     }
 
     @Test
+    void messageTokenUsage_survivesTheRoundTrip() {
+        Session created = store.create("ada", null);
+        created.memory().replaceAll(List.of(
+                ChatMessage.user("hi"),
+                ChatMessage.assistant("hello", new dev.kualu.llm.TokenUsage(27, 23, 50, 20, 5))));
+        store.appendMessages(created);
+
+        Session found = reloadFromDb("ada", created.id());
+        var usage = found.memory().messages().get(1).usage();
+        assertEquals(27, usage.promptTokens());
+        assertEquals(23, usage.completionTokens());
+        assertEquals(50, usage.totalTokens());
+        assertEquals(20, usage.reasoningTokens());
+        assertEquals(5, usage.cachedTokens());
+    }
+
+    @Test
     void find_returnsOneLiveSessionSoConcurrentTurnsShareOneLock() {
         Session created = store.create("ada", null);
 

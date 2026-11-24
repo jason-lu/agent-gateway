@@ -198,15 +198,16 @@ public final class ToolLoop {
                     }
                 }, stream, toolSet);
                 TurnTimings.recordLlmRound((System.nanoTime() - askStart) / 1_000_000);
+                TurnTimings.recordTokenUsage(turn.usage());
                 reply.append(turn.content());
 
                 if (!turn.hasToolCalls()) {
-                    turns.add(ChatMessage.assistant(turn.content()));
+                    turns.add(ChatMessage.assistant(turn.content(), turn.usage()));
                     commit(memory, userTurn, turns);
                     return reply.toString();
                 }
 
-                ChatMessage assistant = ChatMessage.assistantToolCalls(turn.content(), turn.toolCalls());
+                ChatMessage assistant = ChatMessage.assistantToolCalls(turn.content(), turn.toolCalls(), turn.usage());
                 turns.add(assistant);
                 payload.add(assistant);
                 for (ToolCall call : turn.toolCalls()) {
@@ -258,18 +259,19 @@ public final class ToolLoop {
     }
 
     /**
-     * With no tools configured the plain text path is used, which is identical on
-     * the wire and cannot return tool calls. With tools, the request carries the
-     * definitions and the reply is parsed for {@code tool_calls}.
+     * One model round-trip. With no tools on offer the request omits the
+     * {@code tools} field entirely (identical to the plain text path) and any
+     * tool calls the model hallucinates are dropped — only text and usage come
+     * back, so a tool-less run can never surface a tool call.
      */
     private AssistantTurn ask(List<ChatMessage> payload, Consumer<String> onDelta, boolean stream, ToolSet toolSet) {
-        if (toolSet.specs().isEmpty()) {
-            String text = stream ? client.chatStream(payload, onDelta) : client.chat(payload);
-            return new AssistantTurn(text, List.of());
-        }
-        return stream
+        AssistantTurn turn = stream
                 ? client.completeStream(payload, toolSet.specs(), onDelta)
                 : client.complete(payload, toolSet.specs());
+        if (toolSet.specs().isEmpty()) {
+            return new AssistantTurn(turn.content(), List.of(), turn.usage());
+        }
+        return turn;
     }
 
     /** Expected failures are returned as result text so the model can react; nothing escapes. */

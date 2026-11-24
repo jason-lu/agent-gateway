@@ -1,7 +1,9 @@
 package dev.kualu.web.chat;
 
+import dev.kualu.llm.AssistantTurn;
 import dev.kualu.llm.ChatMessage;
 import dev.kualu.llm.ToolCall;
+import dev.kualu.llm.ToolSpec;
 import dev.kualu.llm.client.LlmClient;
 import dev.kualu.llm.client.LlmConfig;
 import dev.kualu.llm.LlmException;
@@ -28,8 +30,8 @@ import static org.mockito.Mockito.when;
 class ChatServiceTest {
 
     /**
-     * Records every {@code chat} call and answers summarisation prompts
-     * ({@code [Previous summary]}) differently from regular turns.
+     * Turns answer {@code REPLY} and record the payload; {@code chat} serves the
+     * memory summariser and answers {@code SUMMARY-TEXT}.
      */
     static final class RecordingLlm extends LlmClient {
         final List<List<ChatMessage>> replyPayloads = new ArrayList<>();
@@ -41,25 +43,26 @@ class ChatServiceTest {
 
         @Override
         public String chat(List<ChatMessage> messages, Integer maxTokens) {
-            if (isSummarization(messages)) {
-                if (summarizeFailure != null) {
-                    throw summarizeFailure;
-                }
-                return "SUMMARY-TEXT";
+            if (summarizeFailure != null) {
+                throw summarizeFailure;
             }
-            replyPayloads.add(List.copyOf(messages));
-            return "REPLY";
+            return "SUMMARY-TEXT";
         }
 
         @Override
-        public String chatStream(List<ChatMessage> messages, java.util.function.Consumer<String> onDelta) {
-            return chat(messages);
+        public AssistantTurn complete(List<ChatMessage> messages, List<ToolSpec> tools) {
+            replyPayloads.add(List.copyOf(messages));
+            return new AssistantTurn("REPLY", List.of());
         }
 
-        private static boolean isSummarization(List<ChatMessage> messages) {
-            return messages.size() == 2
-                    && "system".equals(messages.get(0).role())
-                    && messages.get(1).content().startsWith("[Previous summary]");
+        @Override
+        public AssistantTurn completeStream(List<ChatMessage> messages, List<ToolSpec> tools,
+                java.util.function.Consumer<String> onDelta) {
+            AssistantTurn turn = complete(messages, tools);
+            if (!turn.content().isEmpty()) {
+                onDelta.accept(turn.content());
+            }
+            return turn;
         }
     }
 

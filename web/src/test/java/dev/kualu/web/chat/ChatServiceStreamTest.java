@@ -52,12 +52,12 @@ class ChatServiceStreamTest {
     @Test
     void chatStreamCollectsDeltasAndPersistsTurns() {
         LlmClient client = mock(LlmClient.class);
-        when(client.chatStream(anyList(), any())).thenAnswer(invocation -> {
+        when(client.completeStream(anyList(), anyList(), any())).thenAnswer(invocation -> {
             @SuppressWarnings("unchecked")
-            var onDelta = (java.util.function.Consumer<String>) invocation.getArgument(1);
+            var onDelta = (java.util.function.Consumer<String>) invocation.getArgument(2);
             onDelta.accept("Hel");
             onDelta.accept("lo");
-            return "Hello";
+            return new dev.kualu.llm.AssistantTurn("Hello", List.of());
         });
 
         InMemorySessionStore store = new InMemorySessionStore();
@@ -82,12 +82,12 @@ class ChatServiceStreamTest {
         // Gray-release mode must not batch deltas into sentence segments: the
         // segment gate is skipped there, so each delta reaches the client as-is.
         LlmClient client = mock(LlmClient.class);
-        when(client.chatStream(anyList(), any())).thenAnswer(invocation -> {
+        when(client.completeStream(anyList(), anyList(), any())).thenAnswer(invocation -> {
             @SuppressWarnings("unchecked")
-            var onDelta = (java.util.function.Consumer<String>) invocation.getArgument(1);
+            var onDelta = (java.util.function.Consumer<String>) invocation.getArgument(2);
             onDelta.accept("第一句还没结束");
             onDelta.accept("。第二句！");
-            return "第一句还没结束。第二句！";
+            return new dev.kualu.llm.AssistantTurn("第一句还没结束。第二句！", List.of());
         });
 
         InMemorySessionStore store = new InMemorySessionStore();
@@ -107,7 +107,7 @@ class ChatServiceStreamTest {
     @Test
     void failedChatDoesNotPersistTurns() {
         LlmClient client = mock(LlmClient.class);
-        when(client.chat(anyList())).thenThrow(new dev.kualu.llm.LlmException("boom", 500, "err"));
+        when(client.complete(anyList(), anyList())).thenThrow(new dev.kualu.llm.LlmException("boom", 500, "err"));
 
         InMemorySessionStore store = new InMemorySessionStore();
         Session session = store.create("ada", null);
@@ -128,12 +128,12 @@ class ChatServiceStreamTest {
     @Test
     void partialReplyIsKeptWhenSendFailsMidStream() {
         LlmClient client = mock(LlmClient.class);
-        when(client.chatStream(anyList(), any())).thenAnswer(invocation -> {
+        when(client.completeStream(anyList(), anyList(), any())).thenAnswer(invocation -> {
             @SuppressWarnings("unchecked")
-            var onDelta = (java.util.function.Consumer<String>) invocation.getArgument(1);
+            var onDelta = (java.util.function.Consumer<String>) invocation.getArgument(2);
             onDelta.accept("Hel");
             onDelta.accept("lo");
-            return "Hello";
+            return new dev.kualu.llm.AssistantTurn("Hello", List.of());
         });
 
         InMemorySessionStore store = new InMemorySessionStore();

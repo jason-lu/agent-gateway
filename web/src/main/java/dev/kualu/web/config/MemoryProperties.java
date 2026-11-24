@@ -7,12 +7,16 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * Thresholds are validated only when compression is enabled, so a disabled
  * feature never blocks startup; invalid values then fail fast instead of
  * degrading silently.
+ *
+ * <p>Both thresholds are token counts: {@code max-tokens} is the context
+ * occupancy that triggers a fold, {@code keep-tokens} the budget the verbatim
+ * tail may occupy afterwards.
  */
 @ConfigurationProperties(prefix = "agent.memory")
 public record MemoryProperties(
         boolean enabled,
-        int maxMessages,
-        int keepMessages,
+        int maxTokens,
+        int keepTokens,
         int maxSummaryChars,
         String instruction,
         String summaryProvider,
@@ -21,12 +25,12 @@ public record MemoryProperties(
 
     public MemoryProperties {
         if (enabled) {
-            if (keepMessages < 2) {
-                throw new IllegalArgumentException("agent.memory.keep-messages must be >= 2 (got " + keepMessages + ")");
+            if (keepTokens < 1) {
+                throw new IllegalArgumentException("agent.memory.keep-tokens must be >= 1 (got " + keepTokens + ")");
             }
-            if (maxMessages <= keepMessages + 2) {
-                throw new IllegalArgumentException("agent.memory.max-messages must be > keep-messages + 2 (got "
-                        + maxMessages + ", keep-messages " + keepMessages + ")");
+            if (maxTokens <= keepTokens) {
+                throw new IllegalArgumentException("agent.memory.max-tokens must be > keep-tokens (got "
+                        + maxTokens + ", keep-tokens " + keepTokens + ")");
             }
             if (maxSummaryChars <= 0) {
                 throw new IllegalArgumentException(

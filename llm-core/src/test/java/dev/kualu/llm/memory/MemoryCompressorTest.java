@@ -2,6 +2,7 @@ package dev.kualu.llm.memory;
 
 import dev.kualu.llm.ChatMessage;
 import dev.kualu.llm.LlmException;
+import dev.kualu.llm.TokenUsage;
 import dev.kualu.llm.ToolCall;
 import dev.kualu.llm.client.LlmClient;
 import dev.kualu.llm.client.LlmConfig;
@@ -380,9 +381,10 @@ class MemoryCompressorTest {
     @Test
     void invalidThresholds_areRejected() {
         StubLlm llm = new StubLlm();
-        assertThrows(IllegalArgumentException.class, () -> new MemoryCompressor(llm, 10, 1, null, 4000));
         assertThrows(IllegalArgumentException.class, () -> new MemoryCompressor(llm, 10, 0, null, 4000));
-        assertThrows(IllegalArgumentException.class, () -> new MemoryCompressor(llm, 4, 2, null, 4000));
+        assertThrows(IllegalArgumentException.class, () -> new MemoryCompressor(llm, 10, -1, null, 4000));
+        assertThrows(IllegalArgumentException.class, () -> new MemoryCompressor(llm, 5, 5, null, 4000));
+        assertThrows(IllegalArgumentException.class, () -> new MemoryCompressor(llm, 2, 5, null, 4000));
         assertThrows(IllegalArgumentException.class, () -> new MemoryCompressor(llm, -1, 2, null, 4000));
         assertThrows(IllegalArgumentException.class, () -> new MemoryCompressor(llm, 10, 2, null, 0));
         assertThrows(IllegalArgumentException.class, () -> new MemoryCompressor(llm, 10, 2, null, -1));
@@ -517,5 +519,110 @@ class MemoryCompressorTest {
         assertTrue(MemoryCompressor.DEFAULT_INSTRUCTION.contains("working summary"),
                 "the instruction must be read from " + MemoryCompressor.DEFAULT_INSTRUCTION_RESOURCE);
         assertFalse(MemoryCompressor.DEFAULT_INSTRUCTION.isBlank());
+    }
+
+    // ---- token-driven triggering ---------------------------------------
+
+    @Test
+    void measuredUsageDrivesTheTrigger() {
+        StubLlm llm = new StubLlm();
+        MemoryCompressor compressor = new MemoryCompressor(llm, 500, 100, null, 4000);
+
+        ConversationMemory measured = new ConversationMemory().replaceAll(List.of(
+                ChatMessage.user("hi"),
+                ChatMessage.assistant("hello", new TokenUsage(1000, 5, 1005, 0, 0))));
+        assertTrue(compressor.shouldCompress(measured), "1000 measured prompt tokens cross a 500 threshold");
+
+        ConversationMemory silent = new ConversationMemory().replaceAll(List.of(
+                ChatMessage.user("hi"),
+                ChatMessage.assistant("hello")));
+        assertFalse(compressor.shouldCompress(silent), "two tiny turns estimate far below 500 tokens");
+    }
+
+    @Test
+    void measuredUsageWinsOverTheTextEstimate() {
+        StubLlm llm = new StubLlm();
+        MemoryCompressor compressor = new MemoryCompressor(llm, 500, 100, null, 4000);
+        // The text alone would estimate ~2000 tokens, but the upstream measured a
+        // small request (e.g. a server-side cache): the measurement is the truth.
+        String fat = "x".repeat(4000);
+        ConversationMemory memory = new ConversationMemory().replaceAll(List.of(
+                ChatMessage.user(fat),
+                ChatMessage.assistant(fat, new TokenUsage(120, 8, 128, 0, 0))));
+
+        assertFalse(compressor.shouldCompress(memory));
+    }
+
+    @Test
+    void estimatedOccupancyTriggersWhenNoUsageIsReported() {
+        StubLlm llm = new StubLlm();
+        MemoryCompressor compressor = new MemoryCompressor(llm, 500, 100, null, 4000);
+        String fat = "x".repeat(4000); // ~1000 estimated tokens per turn
+        ConversationMemory memory = new ConversationMemory();
+        for (int i = 0; i < 4; i++) {
+            memory.addUser(fat).addAssistant(fat);
+        }
+
+        assertTrue(compressor.shouldCompress(memory));
+        assertTrue(compressor.maybeCompress(memory, "test"));
+
+        // Budget=100 keeps one exchange; the cut rolls back to its user turn.
+        List<ChatMessage> context = memory.context();
+        assertEquals(3, context.size());
+        assertTrue(context.get(0).content().startsWith(MemoryCompressor.SUMMARY_PREFIX));
+        assertTrue(context.get(1).content().startsWith("x"));
+        assertTrue(context.get(2).content().startsWith("x"));
+    }
+
+    @Test
+    void keepTailFitsTheTokenBudget() {
+        String chunk = "x".repeat(800); // ~200 tokens per turn
+
+        ConversationMemory leanHistory = new ConversationMemory();
+        for (int i = 0; i < 3; i++) {
+            leanHistory.addUser(chunk).addAssistant(chunk);
+        }
+        StubLlm lean = new StubLlm();
+        MemoryCompressor leanCompressor = new MemoryCompressor(lean, 500, 150, null, 4000);
+        assertTrue(leanCompressor.maybeCompress(leanHistory, "test"));
+        // 150-token budget: only the newest exchange survives (cut rolls back to it).
+        List<ChatMessage> leanContext = leanHistory.context();
+        assertEquals(3, leanContext.size());
+        assertTrue(leanContext.get(0).content().startsWith(MemoryCompressor.SUMMARY_PREFIX));
+        assertEquals(chunk, leanContext.get(1).content());
+        assertEquals(chunk, leanContext.get(2).content());
+
+        ConversationMemory roomyHistory = new ConversationMemory();
+        for (int i = 0; i < 3; i++) {
+            roomyHistory.addUser(chunk).addAssistant(chunk);
+        }
+        StubLlm roomy = new StubLlm();
+        MemoryCompressor roomyCompressor = new MemoryCompressor(roomy, 800, 700, null, 4000);
+        assertTrue(roomyCompressor.maybeCompress(roomyHistory, "test"));
+        // 700-token budget: the newest two exchanges survive.
+        List<ChatMessage> roomyContext = roomyHistory.context();
+        assertEquals(5, roomyContext.size());
+        assertTrue(roomyContext.get(0).content().startsWith(MemoryCompressor.SUMMARY_PREFIX));
+    }
+
+    @Test
+    void estimateTokens_countsWideAndAsciiCharactersDifferently() {
+        assertEquals(0, MemoryCompressor.estimateTokens(null));
+        assertEquals(0, MemoryCompressor.estimateTokens(""));
+        assertEquals(1, MemoryCompressor.estimateTokens("abc"));
+        assertEquals(1, MemoryCompressor.estimateTokens("abcd"));
+        assertEquals(2, MemoryCompressor.estimateTokens("abcde"));
+        assertEquals(4, MemoryCompressor.estimateTokens("四个汉字"));
+        assertEquals(5, MemoryCompressor.estimateTokens("四个汉字abcd"));
+    }
+
+    @Test
+    void messageTokens_countToolArgumentsAndImages() {
+        ChatMessage withCalls = ChatMessage.assistantToolCalls("",
+                List.of(new ToolCall("c1", "exec", "{\"command\":\"ls -la /very/long/path\"}")));
+        assertTrue(MemoryCompressor.messageTokens(withCalls) >= 8, () -> "got " + MemoryCompressor.messageTokens(withCalls));
+
+        ChatMessage withImages = ChatMessage.user("what", List.of("data:image/png;base64,AAAA"));
+        assertEquals(1 + MemoryCompressor.IMAGE_TOKENS, MemoryCompressor.messageTokens(withImages));
     }
 }

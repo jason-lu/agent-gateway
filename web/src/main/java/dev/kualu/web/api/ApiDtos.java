@@ -1,5 +1,7 @@
 package dev.kualu.web.api;
 
+import dev.kualu.llm.TokenUsage;
+
 import java.util.List;
 import java.util.Map;
 
@@ -17,7 +19,8 @@ public final class ApiDtos {
     public record SessionResponse(String id, String owner, String title, String createdAt, int messageCount) {
     }
 
-    public record MessageResponse(String reply) {
+    /** One chat reply; {@code usage} is the turn's token total, or {@code null} when not reported. */
+    public record MessageResponse(String reply, TokenUsage usage) {
     }
 
     public record HistoryMessage(String role, String content, List<String> images) {
@@ -32,10 +35,11 @@ public final class ApiDtos {
      * prompts, memory-compression summaries (their content carries the
      * {@code MemoryCompressor.SUMMARY_PREFIX} marker), and tool traffic. Images are
      * returned as stored — {@code ref:<sessionId>/<imageId>} for externalised
-     * pixels, untouched data URIs otherwise.
+     * pixels, untouched data URIs otherwise. {@code usage} is the token accounting
+     * of the assistant turn's model call, or {@code null} when not reported.
      */
     public record RawMessage(String role, String content, String toolCallId, List<RawToolCall> toolCalls,
-            List<String> images) {
+            List<String> images, TokenUsage usage) {
     }
 
     public record HealthResponse(String status, boolean llmConfigured, boolean dbUp) {
@@ -183,7 +187,12 @@ public final class ApiDtos {
     public record SseDelta(String text) {
     }
 
-    public record SseDone(String reply) {
+    /**
+     * SSE {@code done} event. {@code usage} is the turn's token total summed over
+     * its model rounds (tool-call rounds included), or {@code null} when the
+     * upstream reported no accounting.
+     */
+    public record SseDone(String reply, TokenUsage usage) {
     }
 
     public record SseError(String message) {

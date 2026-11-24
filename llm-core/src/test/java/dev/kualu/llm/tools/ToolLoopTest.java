@@ -4,6 +4,7 @@ import dev.kualu.llm.AgentTool;
 import dev.kualu.llm.AssistantTurn;
 import dev.kualu.llm.ChatMessage;
 import dev.kualu.llm.LlmException;
+import dev.kualu.llm.TokenUsage;
 import dev.kualu.llm.ToolCall;
 import dev.kualu.llm.ToolSpec;
 import dev.kualu.llm.client.LlmClient;
@@ -65,6 +66,10 @@ class ToolLoopTest {
             script.add(new AssistantTurn(content, List.of(calls)));
         }
 
+        void replyWith(TokenUsage usage, String content, ToolCall... calls) {
+            script.add(new AssistantTurn(content, List.of(calls), usage));
+        }
+
         void failWith(RuntimeException failure) {
             failures.add(failure);
         }
@@ -83,21 +88,6 @@ class ToolLoopTest {
                 onDelta.accept(turn.content());
             }
             return turn;
-        }
-
-        /** Tool-less turns go through chat() rather than complete(). */
-        @Override
-        public String chat(List<ChatMessage> messages) {
-            return next(messages).content();
-        }
-
-        @Override
-        public String chatStream(List<ChatMessage> messages, Consumer<String> onDelta) {
-            AssistantTurn turn = next(messages);
-            if (!turn.content().isEmpty()) {
-                onDelta.accept(turn.content());
-            }
-            return turn.content();
         }
 
         private AssistantTurn next(List<ChatMessage> messages) {
@@ -159,13 +149,13 @@ class ToolLoopTest {
         assertEquals(ToolLoop.TOOL_POLICY, request.get(0).content());
         assertEquals("user", request.get(1).role());
 
-        // No tools: the plain path sends the payload unchanged.
+        // No tools: the request omits the tools field and carries the payload unchanged.
         List<ChatMessage> plain = new ArrayList<>();
         LlmClient bare = new LlmClient(new LlmConfig("http://localhost", "key", "model")) {
             @Override
-            public String chat(List<ChatMessage> messages) {
+            public AssistantTurn complete(List<ChatMessage> messages, List<ToolSpec> tools) {
                 plain.addAll(messages);
-                return "plain";
+                return new AssistantTurn("plain", List.of());
             }
         };
         new ToolLoop(bare, List.of()).run(new ConversationMemory(), "go");
@@ -193,6 +183,48 @@ class ToolLoopTest {
         } finally {
             TurnTimings.clear();
         }
+    }
+
+    @Test
+    void tokenUsageIsStampedOnAssistantTurnsAndRolledUpInTimings() {
+        RecordingTool tool = new RecordingTool();
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.replyWith(new TokenUsage(100, 4, 104, 0, 0), "", new ToolCall("call_1", "exec", "{}"));
+        llm.replyWith(new TokenUsage(120, 6, 126, 2, 10), "done");
+        ConversationMemory memory = new ConversationMemory();
+
+        TurnTimings timings = TurnTimings.begin();
+        try {
+            new ToolLoop(llm, List.of(tool)).run(memory, "run ls");
+
+            List<ChatMessage> messages = memory.messages();
+            assertEquals(100, messages.get(1).usage().promptTokens());
+            assertEquals(4, messages.get(1).usage().completionTokens());
+            assertEquals(120, messages.get(3).usage().promptTokens());
+            assertEquals(6, messages.get(3).usage().completionTokens());
+            assertEquals(2, messages.get(3).usage().reasoningTokens());
+            assertEquals(10, messages.get(3).usage().cachedTokens());
+
+            // Rounds roll up: summed prompt repeats the context per round, while the
+            // last round's prompt is the context size at end of turn.
+            assertEquals(220, timings.tokenUsage().promptTokens());
+            assertEquals(10, timings.tokenUsage().completionTokens());
+            assertEquals(230, timings.tokenUsage().totalTokens());
+            assertEquals(120, timings.lastPromptTokens());
+        } finally {
+            TurnTimings.clear();
+        }
+    }
+
+    @Test
+    void missingUsageLeavesTheStampNull() {
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.replyWith("done");
+        ConversationMemory memory = new ConversationMemory();
+
+        new ToolLoop(llm, List.of()).run(memory, "hi");
+
+        assertNull(memory.messages().get(1).usage());
     }
 
     @Test
@@ -311,11 +343,11 @@ class ToolLoopTest {
 
     @Test
     void withoutToolsThePlainTextPathIsUsedAndMemoryGetsTheTurn() {
-        // No tools configured: the loop delegates to chat(), exactly like before.
+        // No tools configured: the loop still calls complete(), with an empty tool set.
         LlmClient llm = new LlmClient(new LlmConfig("http://localhost", "key", "model")) {
             @Override
-            public String chat(List<ChatMessage> messages) {
-                return "plain";
+            public AssistantTurn complete(List<ChatMessage> messages, List<ToolSpec> tools) {
+                return new AssistantTurn("plain", List.of());
             }
         };
         ConversationMemory memory = new ConversationMemory();
@@ -332,9 +364,9 @@ class ToolLoopTest {
         List<List<ChatMessage>> requests = new ArrayList<>();
         LlmClient llm = new LlmClient(new LlmConfig("http://localhost", "key", "model")) {
             @Override
-            public String chat(List<ChatMessage> messages) {
+            public AssistantTurn complete(List<ChatMessage> messages, List<ToolSpec> tools) {
                 requests.add(List.copyOf(messages));
-                return "一只猫";
+                return new AssistantTurn("一只猫", List.of());
             }
         };
         ConversationMemory memory = new ConversationMemory();

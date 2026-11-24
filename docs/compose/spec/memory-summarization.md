@@ -1,7 +1,7 @@
 ---
 feature: memory-summarization
 status: delivered
-updated: 2026-11-20
+updated: 2026-11-24
 source: main
 ---
 
@@ -9,7 +9,7 @@ source: main
 
 ## Report
 
-**What was built** — a `MemoryCompressor` in `llm-core` folds older turns into an incremental summary so the request payload stays bounded. Folding is non-destructive: `ConversationMemory.messages()` keeps every raw turn (what `/history`, the web history API and persistence see), the `【历史对话摘要】` summary marker sits at the fold point, and the new `ConversationMemory.context()` — `[system 原提示][摘要 system][最近原文]` — is the bounded view actually sent to the model (`withUser` and `ToolLoop` build payloads from it). The summary is identified by the `【历史对话摘要】` marker, and the verbatim tail always starts at a `user` turn (rolling back if needed) so no run is split and no tool result is orphaned. Both `web` (`ChatService`) and `cli` (`ChatConsole`) compress on the request path; compression failure never blocks the user-visible turn. Thresholds are configurable (`agent.memory.*` / `AGENT_MEMORY_*`, default 20/8, on by default) and validated at startup. Compression events are logged via slf4j (INFO on success, WARN on failure, DEBUG on skip); `llm-core` gained `slf4j-api`, `cli` gained `slf4j-simple`. `/history` and the web history API hide the summary marker.
+**What was built** — a `MemoryCompressor` in `llm-core` folds older turns into an incremental summary so the request payload stays bounded. Folding is non-destructive: `ConversationMemory.messages()` keeps every raw turn (what `/history`, the web history API and persistence see), the `【历史对话摘要】` summary marker sits at the fold point, and the new `ConversationMemory.context()` — `[system 原提示][摘要 system][最近原文]` — is the bounded view actually sent to the model (`withUser` and `ToolLoop` build payloads from it). The summary is identified by the `【历史对话摘要】` marker, and the verbatim tail always starts at a `user` turn (rolling back if needed) so no run is split and no tool result is orphaned. Both `web` (`ChatService`) and `cli` (`ChatConsole`) compress on the request path; compression failure never blocks the user-visible turn. Thresholds are token-driven and configurable (`agent.memory.*` / `AGENT_MEMORY_*`, default `max-tokens` 500000 / `keep-tokens` 4096, on by default) and validated at startup. Compression events are logged via slf4j (INFO on success, WARN on failure, DEBUG on skip); `llm-core` gained `slf4j-api`, `cli` gained `slf4j-simple`. `/history` and the web history API hide the summary marker.
 
 **Verification** — `./gradlew test` PASS across llm-core, cli, web. Independent read-only review found no blockers; its concerns were fixed (CLI `/history` over-filtering by content, web/cli divergent validation when disabled, null exception message, imprecise skip log) or documented as known limitations (a system prompt starting with the summary marker is indistinguishable from a summary). The 2026-11-05 revision (non-destructive folding, see Journey log) re-verified with `./gradlew test` PASS.
 
@@ -31,7 +31,7 @@ source: main
 [0]       system   原系统提示（若创建会话时提供）
 [1..p]    user/assistant/tool   已折叠进摘要的原文轮次（留在历史中，不发给模型）
 [p+1]     system   【历史对话摘要】<summary>     ← 折叠分界点
-[p+2..k]  user/assistant/tool   最近的原文轮次（keep-messages 条左右）
+[p+2..k]  user/assistant/tool   最近的原文轮次（keep-tokens 预算内）
 ```
 
 `context()` 视图（真正发给模型的 payload）：
@@ -52,9 +52,9 @@ source: main
 
 **触发与结果**
 
-- 触发：`context().size() > maxMessages`（含 system / 摘要消息，评估时机见 S2.6）。按 context 而非 `memory.size()` 计数——历史只增不减，用 `size()` 会在长会话里每轮误触发。
-- 压缩后 `context()` 规模 ≈ `2 + keepMessages`（± S2.1-3 的回退余量），随后每轮 +2，涨回 `maxMessages` 再压下一轮；`messages()` 只增不减。
-- 边界合法前提：`keepMessages >= 2` 且 `maxMessages > keepMessages + 2`，配置期校验失败则拒绝启动（见 S2.5）。
+- 触发：context 的 **token 占用** `> maxTokens`（评估时机见 S2.6）。占用优先取最近一条 assistant 消息实测的 `usage.promptTokens`（该次请求真实携带的全量上下文，含请求期开销）；无实测值（旧会话、不上报 usage 的供应商）退回对 context 文本的估算（宽字符 ≈1 token/字，其余 ≈4 字符/token，图片按 850 token/张）。按 context 而非 `memory.size()`——历史只增不减，用 `size()` 会在长会话里每轮误触发。
+- 压缩后 `context()` 的 token 占用 ≈ `keepTokens` + 摘要（± S2.1-3 的回退余量），涨回 `maxTokens` 再压下一轮；`messages()` 只增不减。
+- 边界合法前提：`keepTokens >= 1` 且 `maxTokens > keepTokens`，配置期校验失败则拒绝启动（见 S2.5）。
 
 **增量摘要**
 
@@ -64,7 +64,7 @@ source: main
 - **新变旧的原文轮次**（上次 tail 中被挤出去的部分）作为 `turns` 传入；
 - 二者一起合成新摘要，落在新的折叠分界点；旧摘要标记被移除，更早已折叠的原文继续留在 `messages()`、继续只由摘要代表。
 
-这样单次压缩的 LLM 输入与 `keepMessages` 同阶，不随会话总长度增长。
+这样单次压缩的 LLM 输入与 `keepTokens` 同阶，不随会话总长度增长。
 
 ### [S2.2] `MemoryCompressor`（`llm-core`，包 `dev.kualu.llm.memory`）
 
@@ -152,14 +152,14 @@ role: content
 | Web key | CLI env | 默认 | 说明 |
 |---|---|---|---|
 | `agent.memory.enabled` | `AGENT_MEMORY_ENABLED` | `true` | 总开关，关掉即回退到全量历史 |
-| `agent.memory.max-messages` | `AGENT_MEMORY_MAX_MESSAGES` | `20` | 触发阈值（发给模型的 context 条数，含 system / 摘要） |
-| `agent.memory.keep-messages` | `AGENT_MEMORY_KEEP_MESSAGES` | `8` | 压缩后保留原文的条数 |
+| `agent.memory.max-tokens` | `AGENT_MEMORY_MAX_TOKENS` | `500000` | 触发阈值（context 的 token 占用；优先取最近一次模型调用实测的 `usage.promptTokens`，无实测值按文本估算） |
+| `agent.memory.keep-tokens` | `AGENT_MEMORY_KEEP_TOKENS` | `4096` | 压缩后保留原文的 token 预算（按 user 轮边界回退，可略超） |
 | `agent.memory.instruction` | `AGENT_MEMORY_INSTRUCTION` | 见 S2.4 | 自定义摘要指令 |
 
 校验（启动期失败，不做静默回退）：
 
-- `keepMessages >= 2`
-- `maxMessages > keepMessages + 2`
+- `keepTokens >= 1`
+- `maxTokens > keepTokens`
 - 非正整数 → 拒绝启动
 
 `enabled=false` 时不注册压缩器（web）/ 不调用（cli），行为与现状逐字节一致，**且不做上述校验**——禁用的特性不应因未被使用的参数拦住启动（web 与 cli 一致）。
@@ -207,7 +207,7 @@ role: content
 | 压缩成功 | `INFO` | `memory-compress[session=abc123]: context 24 -> 6 (folded 14 turns, summary 812 chars, input 5230 chars)` |
 | 摘要失败 | `WARN` + throwable 栈 | `memory-compress[session=abc123] FAILED: <reason>; history left unchanged (size 24)` |
 | 无合法切点跳过 | `DEBUG` | `memory-compress[session=abc123] skipped: no user-turn cut point (size 24)` |
-| 配置加载（启动期，由调用方打） | `INFO` | `memory-compress configured: enabled=true, max-messages=20, keep-messages=8` |
+| 配置加载（启动期，由调用方打） | `INFO` | `memory-compress configured: enabled=true, max-tokens=500000, keep-tokens=4096` |
 
 **不记录**：未到阈值的调用。那占绝大多数轮次，打了就是噪音；需要排查时开 `DEBUG` 看 skip 事件即可。
 
@@ -237,7 +237,7 @@ role: content
 - 输入截断：长 user/assistant 轮次被截到 `MAX_TURN_CHARS`、长 tool 结果被截到 `MAX_TOOL_CHARS`，带 `[truncated]` 标记且原文不整段外发。
 - 摘要失败（stub 抛异常）：历史与调用前完全一致，返回 false，不抛。
 - 前缀识别：已有摘要能被找到并正确剥离前缀；不含前缀的 system 消息不会被误认。
-- 配置校验：`keepMessages < 2`、`maxMessages <= keepMessages + 2`、非正数 → `IllegalArgumentException`。
+- 配置校验：`keepTokens < 1`、`maxTokens <= keepTokens`、非正数 → `IllegalArgumentException`。
 
 `llm-core` — `ConversationMemoryTest` 补 `replaceAll` 语义（替换、防御性拷贝、空列表）与 `context()` 视图（无摘要 = 全量、跳过折叠轮次、`withUser` 基于 context）。
 
@@ -281,3 +281,4 @@ role: content
 - **`turns.size() <= keepMessages` 的前置守卫被去掉了**：配置校验已保证 `maxMessages > keepMessages + 2`，而触发条件是 `size() > maxMessages`、头部最多占 2 条，所以 `turns.size() > keepMessages` 恒成立。改为让 `tailStartInTurns <= 0` 统一兜底，少一条不可达分支，也不会走到 `subList` 负数下标。
 - **压缩改为非破坏性折叠（2026-11-05 修订）**：初版压缩用 `replaceAll` 原地丢弃旧轮次，但 `/history`、web 历史 API 与 `messages` jsonb 持久化都读 `messages()`——旧记录跟着消失，不符合「历史完整保留、只有发给 LLM 的是压缩上下文」的预期。修订后原文轮次永不删除：`messages()` 是完整历史，摘要标记停在折叠分界点（`[system][已折叠原文][摘要][tail]`），新增 `context()` 产出 `[system][摘要][tail]` 供 `withUser` / `ToolLoop` 拼请求。触发条件同步改为按 `context().size()` 计数（`messages()` 只增不减，按 `size()` 会在长会话每轮误触发）；增量摘要只喂「旧摘要 + 新变旧的轮次」，已折叠原文不再重放。持久化格式不变（摘要仍是 messages 数组里的 system 消息），旧压缩会话 `[system][摘要][tail]` 按「折叠点 = 摘要位置」解读即可兼容。代价是存储随会话线性增长——这正是「保留聊天历史」的题中之义，由会话生命周期兜底。
 - **摘要输入有界 + 标题纪律（2026-11-20 修订）**：线上出现「历史对话摘要只总结第一个问题」——根因是摘要请求的**输入无上限**：`summarizePrompt` 把每条被折叠轮次的 `content()` 原样拼进 `[Older turns]`，`tool` 结果（web_search 单条最长 8000 字符）把真正的问答淹没，flash 摘要模型的注意力只落在开头第一条，且输出成聊天口吻而非摘要。修订分两层：① 指令（`summarize-instruction.txt`）加「`[Older turns]` 只读、不得续写/回答」+「输出以 `# 摘要` 标题开头」两条纪律；② 代码（`MemoryCompressor`）给输入加界——`abbreviate()` 按角色截断（`MAX_TURN_CHARS=2000`、`MAX_TOOL_CHARS=240`，带 `[truncated]` 标记），增量压缩前用 `stripSummaryHeading()` 剥掉旧标题避免叠加，成功日志加 `input N chars` 便于诊断超长折叠。部署侧摘要模型从 flash 换到 `mimo-v2.6-pro`（`AGENT_MEMORY_SUMMARY_MODEL`）。
+- **触发与保留窗口改为 token 占用驱动（2026-11-24 修订）**：消息条数是坏的压力表——工具会话一条结果上万 token，20 条就爆窗；闲聊 50 条短消息才几千 token，却按条数误触发。前置工作先在每轮 assistant 消息上持久化了上游实测的 `usage`（`session_messages.token_usage`），本次把压缩触发与折叠几何都换成 token：① 触发阈值 `maxTokens`（默认 500000）——占用取最近一条 assistant 消息实测的 `usage.promptTokens`（该次调用真实携带的上下文），无实测值退回 `estimateTokens` 文本估算（宽字符 1 token/字、其余 4 字符/token、图片 850 token/张，仅作压力表，不是分词器）；② 保留窗口改 `keepTokens` 预算（默认 4096）——从尾部往回收到预算为止（最新一条独超预算也保留），再按 user 轮边界回退。**保留窗口必须一起改成 token**：若触发按 token、窗口按条数，折叠后 tail 仍超阈值且「无可折叠内容」（`tailStartInTurns <= 0`），压缩器陷入空转。配置项 `AGENT_MEMORY_MAX_MESSAGES`/`AGENT_MEMORY_KEEP_MESSAGES` 随之替换为 `AGENT_MEMORY_MAX_TOKENS`/`AGENT_MEMORY_KEEP_TOKENS`，校验改为 `keepTokens >= 1` 且 `maxTokens > keepTokens`。成功日志改为 `context N msgs/~X tok -> M msgs/~Y tok`。

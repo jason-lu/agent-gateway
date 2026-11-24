@@ -26,6 +26,7 @@ import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -652,6 +653,79 @@ class LlmClientTest {
                 () -> client.complete(List.of(ChatMessage.user("hi")), execTools()));
 
         assertTrue(ex.getMessage().contains("had no content"));
+    }
+
+    @Test
+    void complete_decodesUsageFromTheResponseBody() {
+        responseBody = """
+                {"choices":[{"message":{"role":"assistant","content":"hi"}}],
+                 "usage":{"prompt_tokens":27,"completion_tokens":23,"total_tokens":50,
+                          "completion_tokens_details":{"reasoning_tokens":20},
+                          "prompt_tokens_details":{"cached_tokens":5}}}
+                """;
+
+        LlmClient client = new LlmClient(config);
+        AssistantTurn turn = client.complete(List.of(ChatMessage.user("hi")), List.of());
+
+        assertEquals(27, turn.usage().promptTokens());
+        assertEquals(23, turn.usage().completionTokens());
+        assertEquals(50, turn.usage().totalTokens());
+        assertEquals(20, turn.usage().reasoningTokens());
+        assertEquals(5, turn.usage().cachedTokens());
+    }
+
+    @Test
+    void complete_withoutUsage_leavesUsageNull() {
+        responseBody = """
+                {"choices":[{"message":{"role":"assistant","content":"hi"}}]}
+                """;
+
+        LlmClient client = new LlmClient(config);
+        AssistantTurn turn = client.complete(List.of(ChatMessage.user("hi")), List.of());
+
+        assertNull(turn.usage());
+    }
+
+    @Test
+    void completeStream_takesUsageFromTheFinalEmptyChoicesChunk() {
+        streamBody = """
+                data: {"choices":[{"delta":{"content":"hi"}}],"usage":null}\s
+
+                data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}\s
+
+                data: [DONE]\s
+
+                """;
+
+        LlmClient client = new LlmClient(config);
+        List<String> seen = new ArrayList<>();
+        AssistantTurn turn = client.completeStream(List.of(ChatMessage.user("hi")), List.of(), seen::add);
+
+        assertEquals(List.of("hi"), seen);
+        assertEquals("hi", turn.content());
+        assertEquals(10, turn.usage().promptTokens());
+        assertEquals(5, turn.usage().completionTokens());
+        assertEquals(15, turn.usage().totalTokens());
+    }
+
+    @Test
+    void completeStream_lastReportedUsageWins() {
+        streamBody = """
+                data: {"choices":[{"delta":{"content":"a"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\s
+
+                data: {"choices":[{"delta":{"content":"b"}}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}\s
+
+                data: [DONE]\s
+
+                """;
+
+        LlmClient client = new LlmClient(config);
+        AssistantTurn turn = client.completeStream(List.of(ChatMessage.user("hi")), List.of(), d -> {});
+
+        assertEquals("ab", turn.content());
+        assertEquals(1, turn.usage().promptTokens());
+        assertEquals(2, turn.usage().completionTokens());
+        assertEquals(3, turn.usage().totalTokens());
     }
 
     @Test

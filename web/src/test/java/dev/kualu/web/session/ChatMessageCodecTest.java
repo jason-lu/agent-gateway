@@ -2,6 +2,7 @@ package dev.kualu.web.session;
 
 import tools.jackson.databind.ObjectMapper;
 import dev.kualu.llm.ChatMessage;
+import dev.kualu.llm.TokenUsage;
 import dev.kualu.llm.ToolCall;
 import dev.kualu.llm.memory.MemoryCompressor;
 import org.junit.jupiter.api.Test;
@@ -31,6 +32,37 @@ class ChatMessageCodecTest {
                 ChatMessage.user("thanks"))) {
             assertEquals(message, roundTrip(message));
         }
+    }
+
+    @Test
+    void usage_survivesTheRoundTrip() {
+        ChatMessage message = ChatMessage.assistant("here you go", new TokenUsage(27, 23, 50, 20, 5));
+
+        ChatMessage decoded = roundTrip(message);
+
+        assertEquals(message, decoded);
+        assertEquals(27, decoded.usage().promptTokens());
+        assertEquals(23, decoded.usage().completionTokens());
+        assertEquals(50, decoded.usage().totalTokens());
+        assertEquals(20, decoded.usage().reasoningTokens());
+        assertEquals(5, decoded.usage().cachedTokens());
+    }
+
+    @Test
+    void usage_isOmittedFromRowWhenAbsent() {
+        ChatMessageCodec.Encoded encoded = codec.encode(ChatMessage.assistant("hi"));
+
+        assertNull(encoded.usage(), "absent usage must not be written: " + encoded);
+        assertNull(roundTrip(ChatMessage.assistant("hi")).usage());
+    }
+
+    @Test
+    void usage_legacyRowWithoutTheFieldDecodesToNull() {
+        ChatMessage decoded = codec.decode(new ChatMessageCodec.Encoded(
+                "assistant", "hi", null, null, null, null));
+
+        assertNull(decoded.usage());
+        assertEquals("hi", decoded.content());
     }
 
     @Test

@@ -14,9 +14,11 @@ import java.util.Objects;
  * @param images    image URLs or {@code data:} URIs for vision models ({@code image_url} parts);
  *                  {@code null} except on user turns. Text and images are sent as one
  *                  multimodal {@code content} array.
+ * @param usage     tokens the model call behind this turn consumed ({@code null} when
+ *                  unknown — old rows, mocked turns); only set on assistant turns
  */
 public record ChatMessage(String role, String content, String toolCallId, List<ToolCall> toolCalls,
-                          List<String> images) {
+                          List<String> images, TokenUsage usage) {
 
     public ChatMessage {
         Objects.requireNonNull(role, "role");
@@ -50,29 +52,38 @@ public record ChatMessage(String role, String content, String toolCallId, List<T
             }
             images = List.copyOf(images);
         }
+        if (usage != null && !"assistant".equals(role)) {
+            throw new IllegalArgumentException("usage is only valid on assistant turns");
+        }
     }
 
     /** System/user/assistant turn without tool correlation. */
     public ChatMessage(String role, String content) {
-        this(role, content, null, null, null);
+        this(role, content, null, null, null, null);
     }
 
     /** Turn without tool calls (kept for message decoding). */
     public ChatMessage(String role, String content, String toolCallId) {
-        this(role, content, toolCallId, null, null);
+        this(role, content, toolCallId, null, null, null);
     }
 
-    /** Turn without images (kept for message decoding). */
+    /** Turn without images or usage (kept for message decoding). */
     public ChatMessage(String role, String content, String toolCallId, List<ToolCall> toolCalls) {
-        this(role, content, toolCallId, toolCalls, null);
+        this(role, content, toolCallId, toolCalls, null, null);
+    }
+
+    /** Turn without usage (kept for message decoding). */
+    public ChatMessage(String role, String content, String toolCallId, List<ToolCall> toolCalls,
+                       List<String> images) {
+        this(role, content, toolCallId, toolCalls, images, null);
     }
 
     public static ChatMessage system(String content) {
-        return new ChatMessage("system", content, null, null, null);
+        return new ChatMessage("system", content, null, null, null, null);
     }
 
     public static ChatMessage user(String content) {
-        return new ChatMessage("user", content, null, null, null);
+        return new ChatMessage("user", content, null, null, null, null);
     }
 
     /**
@@ -83,11 +94,16 @@ public record ChatMessage(String role, String content, String toolCallId, List<T
         if (images == null || images.isEmpty()) {
             return user(content);
         }
-        return new ChatMessage("user", content, null, null, images);
+        return new ChatMessage("user", content, null, null, images, null);
     }
 
     public static ChatMessage assistant(String content) {
         return new ChatMessage("assistant", content, null, null);
+    }
+
+    /** Assistant turn that records the tokens its model call consumed (or {@code null}). */
+    public static ChatMessage assistant(String content, TokenUsage usage) {
+        return new ChatMessage("assistant", content, null, null, null, usage);
     }
 
     /**
@@ -96,6 +112,11 @@ public record ChatMessage(String role, String content, String toolCallId, List<T
      */
     public static ChatMessage assistantToolCalls(String content, List<ToolCall> toolCalls) {
         return new ChatMessage("assistant", content, null, toolCalls);
+    }
+
+    /** Tool-call assistant turn that records the tokens its model call consumed (or {@code null}). */
+    public static ChatMessage assistantToolCalls(String content, List<ToolCall> toolCalls, TokenUsage usage) {
+        return new ChatMessage("assistant", content, null, toolCalls, null, usage);
     }
 
     /**

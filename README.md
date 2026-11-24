@@ -47,8 +47,8 @@ Every user picks a concrete model in the chat window (`GET /api/v1/llm/models` l
 | Database user | `AGENT_DB_USERNAME` | — | `agent.db.username` (default `postgres`) |
 | Database password | `AGENT_DB_PASSWORD` | — | `agent.db.password` (**no default, never in source**) |
 | Memory compression | `AGENT_MEMORY_ENABLED` | — | `agent.memory.enabled` (default `true`) |
-| Compression threshold | `AGENT_MEMORY_MAX_MESSAGES` | — | `agent.memory.max-messages` (default `20`) |
-| Turns kept verbatim | `AGENT_MEMORY_KEEP_MESSAGES` | — | `agent.memory.keep-messages` (default `8`) |
+| Compression threshold (tokens) | `AGENT_MEMORY_MAX_TOKENS` | — | `agent.memory.max-tokens` (default `500000`) |
+| Verbatim tail budget (tokens) | `AGENT_MEMORY_KEEP_TOKENS` | — | `agent.memory.keep-tokens` (default `4096`) |
 | Summary length cap | `AGENT_MEMORY_MAX_SUMMARY_CHARS` | — | `agent.memory.max-summary-chars` (default `4000`) |
 | Summary instruction | `AGENT_MEMORY_INSTRUCTION` | — | `agent.memory.instruction` (default: `summarize-instruction.txt`) |
 | Summary provider | `AGENT_MEMORY_SUMMARY_PROVIDER` | — | `agent.memory.summary-provider` (default: empty → chat default model) |
@@ -120,8 +120,8 @@ The console keeps multi-turn memory in session: each message is sent with prior 
 By default the full history is sent with every request, so long conversations grow without bound. Enable compression (on by default) to keep the payload bounded:
 
 - Compression only shrinks the context sent to the model — the stored history keeps every turn, so `/history` and `GET /api/v1/sessions/{id}/messages` still show the whole conversation.
-- When the context passes `max-messages` (default 20), the oldest turns are folded into a single summary message.
-- The most recent `keep-messages` turns (default 8) always stay verbatim; the cut never splits a turn and never orphans a tool result.
+- When the context's **token occupancy** passes `max-tokens` (default 500000), the oldest turns are folded into a single summary message. The occupancy is the newest assistant turn's measured `usage.promptTokens` (the request that call actually carried) when the upstream reports one, and falls back to a CJK-aware text estimate of the context when it does not.
+- The most recent turns that fit the `keep-tokens` budget (default 4096) stay verbatim; the cut never splits a turn and never orphans a tool result.
 - The summary is regenerated incrementally — the previous summary plus the turns that just aged out — so the cost does not grow with the conversation.
 - The summarisation input is bounded too: each folded turn is truncated before the summary prompt is built (user/assistant at 2000 chars, `tool` results at 240 chars), so raw web-search dumps can't drown out the real questions.
 - The summary body is capped at `max-summary-chars` (default 4000): the summarisation call passes the same number as `max_tokens`, and any overlong output is truncated, so the payload stays bounded even over very long sessions.
@@ -135,12 +135,12 @@ Logs (slf4j; `web` uses logback, `cli` prints to stderr via `slf4j-simple`):
 
 | Event | Level |
 |---|---|
-| Compression succeeded (`context 24 -> 6 (folded 14 turns, …)`) | `INFO` |
+| Compression succeeded (`context 24 msgs/~12k tok -> 6 msgs/~2k tok (folded 14 turns, …)`) | `INFO` |
 | Summarisation failed, history unchanged | `WARN` |
 | Skipped (no legal cut point) | `DEBUG` |
 | Thresholds loaded at startup | `INFO` |
 
-Thresholds are validated at startup: `keep-messages >= 2` and `max-messages > keep-messages + 2`, otherwise the process refuses to start.
+Thresholds are validated at startup: `keep-tokens >= 1` and `max-tokens > keep-tokens`, otherwise the process refuses to start.
 
 ### Turn timing (web)
 
@@ -497,7 +497,7 @@ To keep the payload bounded over a long session, wrap the memory with `MemoryCom
 ```java
 import dev.kualu.llm.memory.MemoryCompressor;
 
-MemoryCompressor compressor = new MemoryCompressor(client, 20, 8, null);
+MemoryCompressor compressor = new MemoryCompressor(client, 500000, 4096, null, 4000);
 // before each request:
 compressor.maybeCompress(memory, "session=abc");
 List<ChatMessage> payload = memory.withUser(user);

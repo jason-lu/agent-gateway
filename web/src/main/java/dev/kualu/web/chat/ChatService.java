@@ -273,7 +273,8 @@ public class ChatService {
                             message.toolCalls() == null ? null : message.toolCalls().stream()
                                     .map(call -> new RawToolCall(call.id(), call.name(), call.arguments()))
                                     .toList(),
-                            message.images()))
+                            message.images(),
+                            message.usage()))
                     .toList();
         }
     }

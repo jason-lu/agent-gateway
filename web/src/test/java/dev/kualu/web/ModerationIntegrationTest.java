@@ -12,6 +12,8 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
@@ -96,7 +98,8 @@ class ModerationIntegrationTest {
 
     @Test
     void redactedInputIsMaskedBeforeTheModelSeesIt() throws Exception {
-        when(llmClient.chat(anyList())).thenReturn("好的");
+        when(llmClient.complete(anyList(), anyList()))
+                .thenReturn(new dev.kualu.llm.AssistantTurn("好的", List.of()));
 
         String token = login("alice", "password123");
         String sessionId = createSession(token);
@@ -116,7 +119,8 @@ class ModerationIntegrationTest {
 
     @Test
     void blockedOutputBecomesStandardRefusal() throws Exception {
-        when(llmClient.chat(anyList())).thenReturn("回复里夹着暴力示例词，后面还有内容");
+        when(llmClient.complete(anyList(), anyList()))
+                .thenReturn(new dev.kualu.llm.AssistantTurn("回复里夹着暴力示例词，后面还有内容", List.of()));
 
         String token = login("alice", "password123");
         String sessionId = createSession(token);
@@ -181,7 +185,8 @@ class ModerationIntegrationTest {
 
     @Test
     void cleanInputPassesUntouched() throws Exception {
-        when(llmClient.chat(anyList())).thenReturn("好的");
+        when(llmClient.complete(anyList(), anyList()))
+                .thenReturn(new dev.kualu.llm.AssistantTurn("好的", List.of()));
 
         String token = login("alice", "password123");
         String sessionId = createSession(token);
@@ -195,12 +200,12 @@ class ModerationIntegrationTest {
 
     @Test
     void blockedStreamSegmentEmitsModerationEventAndRefusal() throws Exception {
-        when(llmClient.chatStream(anyList(), org.mockito.ArgumentMatchers.any())).thenAnswer(invocation -> {
+        when(llmClient.completeStream(anyList(), anyList(), org.mockito.ArgumentMatchers.any())).thenAnswer(invocation -> {
             @SuppressWarnings("unchecked")
-            java.util.function.Consumer<String> onDelta = invocation.getArgument(1);
+            java.util.function.Consumer<String> onDelta = invocation.getArgument(2);
             onDelta.accept("安全的一句。");
             onDelta.accept("这里有暴力示例词。后面被掐断。");
-            return "安全的一句。这里有暴力示例词。后面被掐断。";
+            return new dev.kualu.llm.AssistantTurn("安全的一句。这里有暴力示例词。后面被掐断。", List.of());
         });
 
         String token = login("alice", "password123");

@@ -9,6 +9,7 @@ import dev.kualu.http.HttpClient;
 import dev.kualu.llm.AssistantTurn;
 import dev.kualu.llm.ChatMessage;
 import dev.kualu.llm.LlmException;
+import dev.kualu.llm.TokenUsage;
 import dev.kualu.llm.ToolCall;
 import dev.kualu.llm.ToolSpec;
 
@@ -208,11 +209,15 @@ public class LlmClient {
     /**
      * Streams the turn with tool definitions: text deltas go to {@code onDelta}, and the
      * returned turn carries the full reply text plus any tool calls the model requested.
+     * The turn's {@code usage} is the last block the stream reported (backends that
+     * report once, at the end, have that one taken; per-chunk cumulative reports
+     * resolve to their final value).
      */
     public AssistantTurn completeStream(List<ChatMessage> messages, List<ToolSpec> tools, Consumer<String> onDelta) {
         Objects.requireNonNull(onDelta, "onDelta");
         StringBuilder full = new StringBuilder();
         ToolCallAccumulator calls = new ToolCallAccumulator();
+        TokenUsage[] usage = new TokenUsage[1];
         try (Stream<SseDelta> deltas = deltaStream(messages, tools)) {
             deltas.forEach(delta -> {
                 if (delta.text() != null) {
@@ -220,9 +225,12 @@ public class LlmClient {
                     onDelta.accept(delta.text());
                 }
                 delta.fragments().forEach(calls::add);
+                if (delta.usage() != null) {
+                    usage[0] = delta.usage();
+                }
             });
         }
-        return new AssistantTurn(full.toString(), calls.finish());
+        return new AssistantTurn(full.toString(), calls.finish(), usage[0]);
     }
 
     private Stream<SseDelta> deltaStream(List<ChatMessage> messages, List<ToolSpec> tools) {

@@ -1,6 +1,7 @@
 package dev.kualu.web.session;
 
 import dev.kualu.llm.ChatMessage;
+import dev.kualu.llm.TokenUsage;
 import dev.kualu.llm.ToolCall;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
@@ -18,7 +19,8 @@ import java.util.List;
  * {@link ChatMessage} is a record with an extra convenience constructor, and a
  * persistence boundary should not depend on which one a mapper happens to pick.
  * {@code role}/{@code content}/{@code toolCallId} are plain columns; the two
- * list fields ({@code toolCalls}, {@code images}) are JSON documents.
+ * list fields ({@code toolCalls}, {@code images}) and the {@code usage} block
+ * are JSON documents.
  */
 public final class ChatMessageCodec {
 
@@ -28,8 +30,9 @@ public final class ChatMessageCodec {
         this.mapper = mapper;
     }
 
-    /** One message as row values; the two list fields are JSON text or {@code null}. */
-    public record Encoded(String role, String content, String toolCallId, String toolCalls, String images) {
+    /** One message as row values; the list fields and usage are JSON text or {@code null}. */
+    public record Encoded(String role, String content, String toolCallId, String toolCalls, String images,
+                          String usage) {
     }
 
     public Encoded encode(ChatMessage message) {
@@ -38,7 +41,8 @@ public final class ChatMessageCodec {
                 message.content(),
                 message.toolCallId(),
                 encodeToolCalls(message.toolCalls()),
-                encodeImages(message.images()));
+                encodeImages(message.images()),
+                encodeUsage(message.usage()));
     }
 
     public ChatMessage decode(Encoded row) {
@@ -47,7 +51,8 @@ public final class ChatMessageCodec {
                 row.content(),
                 row.toolCallId(),
                 decodeToolCalls(row.toolCalls()),
-                decodeImages(row.images()));
+                decodeImages(row.images()),
+                decodeUsage(row.usage()));
     }
 
     /** @return JSON array of {@code {id, name, arguments}} objects; {@code null} when absent */
@@ -110,6 +115,42 @@ public final class ChatMessageCodec {
             images.add(node.asText());
         }
         return List.copyOf(images);
+    }
+
+    /** @return JSON object of the five token counters; {@code null} when absent */
+    String encodeUsage(TokenUsage usage) {
+        if (usage == null) {
+            return null;
+        }
+        ObjectNode node = mapper.createObjectNode();
+        node.put("promptTokens", usage.promptTokens());
+        node.put("completionTokens", usage.completionTokens());
+        node.put("totalTokens", usage.totalTokens());
+        node.put("reasoningTokens", usage.reasoningTokens());
+        node.put("cachedTokens", usage.cachedTokens());
+        return node.toString();
+    }
+
+    /** @return {@code null} when the JSON is absent */
+    TokenUsage decodeUsage(String json) {
+        if (json == null || json.isBlank()) {
+            return null;
+        }
+        JsonNode root = parse(json, "usage");
+        if (!root.isObject()) {
+            return null;
+        }
+        return new TokenUsage(
+                intOf(root, "promptTokens"),
+                intOf(root, "completionTokens"),
+                intOf(root, "totalTokens"),
+                intOf(root, "reasoningTokens"),
+                intOf(root, "cachedTokens"));
+    }
+
+    private static int intOf(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        return value == null || value.isNull() ? 0 : value.asInt();
     }
 
     private JsonNode parse(String json, String field) {

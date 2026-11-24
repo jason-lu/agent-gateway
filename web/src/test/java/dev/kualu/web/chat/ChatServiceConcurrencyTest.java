@@ -39,9 +39,9 @@ class ChatServiceConcurrencyTest {
     @Test
     void parallelChatsOnOneSessionDoNotCorruptHistory() throws Exception {
         LlmClient client = mock(LlmClient.class);
-        when(client.chat(anyList())).thenAnswer(invocation -> {
+        when(client.complete(anyList(), anyList())).thenAnswer(invocation -> {
             Thread.sleep(5);
-            return "ok";
+            return new dev.kualu.llm.AssistantTurn("ok", List.of());
         });
 
         InMemorySessionStore store = new InMemorySessionStore();

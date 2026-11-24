@@ -7,6 +7,7 @@ import com.google.gson.JsonParser;
 import com.google.gson.JsonSyntaxException;
 
 import dev.kualu.llm.LlmException;
+import dev.kualu.llm.TokenUsage;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -48,14 +49,18 @@ final class SseContentDeltas {
             throw new LlmException("LLM stream error: " + LlmErrorMessages.fromApiError(error), 200, data);
         }
 
+        // Usage rides its own final chunk on some backends (empty choices), and may
+        // accompany content chunks on others — take it wherever it appears.
+        TokenUsage usage = TokenUsages.fromJson(root.get("usage"));
+
         JsonArray choices = root.getAsJsonArray("choices");
         if (choices == null || choices.isEmpty()) {
-            return null;
+            return usage == null ? null : new SseDelta(null, List.of(), usage);
         }
 
         JsonElement deltaEl = choices.get(0).getAsJsonObject().get("delta");
         if (deltaEl == null || !deltaEl.isJsonObject()) {
-            return null;
+            return usage == null ? null : new SseDelta(null, List.of(), usage);
         }
         JsonObject delta = deltaEl.getAsJsonObject();
 
@@ -70,10 +75,10 @@ final class SseContentDeltas {
         }
 
         List<ToolCallFragment> fragments = parseFragments(delta.get("tool_calls"));
-        if (text == null && fragments.isEmpty()) {
+        if (text == null && fragments.isEmpty() && usage == null) {
             return null;
         }
-        return new SseDelta(text, fragments);
+        return new SseDelta(text, fragments, usage);
     }
 
     private static List<ToolCallFragment> parseFragments(JsonElement toolCallsEl) {

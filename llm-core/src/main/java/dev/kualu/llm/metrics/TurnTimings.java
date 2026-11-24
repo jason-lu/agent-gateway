@@ -1,5 +1,7 @@
 package dev.kualu.llm.metrics;
 
+import dev.kualu.llm.TokenUsage;
+
 /**
  * Per-turn timing collector. One instance is bound to the thread that starts a
  * turn ({@link #begin()}) and inherited by worker threads it spawns, so deep
@@ -34,6 +36,17 @@ public final class TurnTimings {
     private long llmMs;
     private long llmTtftMs = -1;
     private int llmRounds;
+
+    /** Token sums across the turn's model rounds ({@code promptTokens} sums repeat the context per round). */
+    private boolean tokensRecorded;
+    private long tokenPrompt;
+    private long tokenCompletion;
+    private long tokenTotal;
+    private long tokenReasoning;
+    private long tokenCached;
+
+    /** {@code promptTokens} of the last reported round — the context size at end of turn. */
+    private long lastPromptTokens;
 
     private boolean persistRecorded;
     private long persistEncodeMs;
@@ -105,6 +118,23 @@ public final class TurnTimings {
         if (t != null) {
             t.llmMs += ms;
             t.llmRounds++;
+        }
+    }
+
+    /**
+     * Token accounting of one model round; rounds sum up to the turn total and
+     * the last call's {@code promptTokens} is kept as the end-of-turn context size.
+     */
+    public static void recordTokenUsage(TokenUsage usage) {
+        TurnTimings t = BOUND.get();
+        if (t != null && usage != null) {
+            t.tokensRecorded = true;
+            t.tokenPrompt += usage.promptTokens();
+            t.tokenCompletion += usage.completionTokens();
+            t.tokenTotal += usage.totalTokens();
+            t.tokenReasoning += usage.reasoningTokens();
+            t.tokenCached += usage.cachedTokens();
+            t.lastPromptTokens = usage.promptTokens();
         }
     }
 
@@ -215,6 +245,23 @@ public final class TurnTimings {
         return llmRounds;
     }
 
+    public boolean hasTokens() {
+        return tokensRecorded;
+    }
+
+    /** The turn's token total summed across model rounds, or {@code null} when none was reported. */
+    public TokenUsage tokenUsage() {
+        return tokensRecorded
+                ? new TokenUsage((int) tokenPrompt, (int) tokenCompletion, (int) tokenTotal,
+                        (int) tokenReasoning, (int) tokenCached)
+                : null;
+    }
+
+    /** {@code promptTokens} of the last reported round (context size at end of turn), or {@code -1}. */
+    public long lastPromptTokens() {
+        return tokensRecorded ? lastPromptTokens : -1;
+    }
+
     public boolean hasPersist() {
         return persistRecorded;
     }
@@ -270,6 +317,8 @@ public final class TurnTimings {
                 + " llm=" + (llmRounds > 0
                         ? llmMs + "ms(ttft=" + (llmTtftMs < 0 ? "-" : llmTtftMs + "ms") + ",rounds=" + llmRounds + ")"
                         : "-")
+                + " tokens=" + segment(tokensRecorded, "(prompt=" + tokenPrompt + ",completion=" + tokenCompletion
+                        + ",reasoning=" + tokenReasoning + ",cached=" + tokenCached + ",ctx=" + lastPromptTokens + ")")
                 + " tools=" + toolsSegment()
                 + " persist=" + segment(persistRecorded, persistMs() + "ms(encode=" + persistEncodeMs
                         + ",write=" + persistWriteMs + ",chars=" + persistChars + ")");

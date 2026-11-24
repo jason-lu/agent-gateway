@@ -260,7 +260,8 @@ public class ModerationService {
         for (int i = messages.size() - 1; i >= 0; i--) {
             ChatMessage message = messages.get(i);
             if ("assistant".equals(message.role())) {
-                messages.set(i, new ChatMessage("assistant", newContent, message.toolCallId(), message.toolCalls()));
+                messages.set(i, new ChatMessage("assistant", newContent, message.toolCallId(),
+                        message.toolCalls(), null, message.usage()));
                 memory.replaceAll(messages);
                 return;
             }

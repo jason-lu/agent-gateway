@@ -160,13 +160,13 @@ public class Main {
             log.info("memory-compress configured: enabled=false");
             return null;
         }
-        int maxMessages = Integer.parseInt(envOr("AGENT_MEMORY_MAX_MESSAGES", "20"));
-        int keepMessages = Integer.parseInt(envOr("AGENT_MEMORY_KEEP_MESSAGES", "8"));
+        int maxTokens = Integer.parseInt(envOr("AGENT_MEMORY_MAX_TOKENS", "500000"));
+        int keepTokens = Integer.parseInt(envOr("AGENT_MEMORY_KEEP_TOKENS", "4096"));
         int maxSummaryChars = Integer.parseInt(envOr("AGENT_MEMORY_MAX_SUMMARY_CHARS", "4000"));
         String instruction = envOr("AGENT_MEMORY_INSTRUCTION", "");
-        log.info("memory-compress configured: enabled=true, max-messages={}, keep-messages={}, max-summary-chars={}",
-                maxMessages, keepMessages, maxSummaryChars);
-        return new MemoryCompressor(client, maxMessages, keepMessages, instruction, maxSummaryChars);
+        log.info("memory-compress configured: enabled=true, max-tokens={}, keep-tokens={}, max-summary-chars={}",
+                maxTokens, keepTokens, maxSummaryChars);
+        return new MemoryCompressor(client, maxTokens, keepTokens, instruction, maxSummaryChars);
     }
 
     private static String envOr(String key, String fallback) {

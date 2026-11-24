@@ -11,6 +11,8 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.when;
@@ -68,7 +70,7 @@ class ModerationFlagModeIntegrationTest {
 
     @Test
     void flagModeAuditsWithoutIntercepting() throws Exception {
-        when(llmClient.chat(anyList())).thenReturn("好的");
+        when(llmClient.complete(anyList(), anyList())).thenReturn(new dev.kualu.llm.AssistantTurn("好的", List.of()));
 
         String token = login();
         String sessionId = createSession(token);

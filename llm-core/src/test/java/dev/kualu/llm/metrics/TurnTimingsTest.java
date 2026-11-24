@@ -1,5 +1,6 @@
 package dev.kualu.llm.metrics;
 
+import dev.kualu.llm.TokenUsage;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -24,9 +25,34 @@ class TurnTimingsTest {
         TurnTimings.recordList(1, 2, 3);
         TurnTimings.recordCompress(1, true, 2);
         TurnTimings.recordLlmRound(1);
+        TurnTimings.recordTokenUsage(new TokenUsage(1, 2, 3, 0, 0));
         TurnTimings.recordFirstDelta();
         TurnTimings.recordPersist(1, 2, 3);
         assertNull(TurnTimings.current());
+    }
+
+    @Test
+    void tokensAreSummedAcrossRoundsAndTheLastPromptIsTheContextSize() {
+        TurnTimings timings = TurnTimings.begin();
+        TurnTimings.recordTokenUsage(new TokenUsage(100, 4, 104, 0, 3));
+        TurnTimings.recordTokenUsage(new TokenUsage(120, 6, 126, 2, 9));
+
+        assertEquals(220, timings.tokenUsage().promptTokens());
+        assertEquals(10, timings.tokenUsage().completionTokens());
+        assertEquals(230, timings.tokenUsage().totalTokens());
+        assertEquals(2, timings.tokenUsage().reasoningTokens());
+        assertEquals(12, timings.tokenUsage().cachedTokens());
+        assertEquals(120, timings.lastPromptTokens());
+        assertTrue(timings.toLogLine().contains(
+                "tokens=(prompt=220,completion=10,reasoning=2,cached=12,ctx=120)"), timings.toLogLine());
+    }
+
+    @Test
+    void missingTokenSegmentPrintsDash() {
+        TurnTimings timings = TurnTimings.begin();
+        assertNull(timings.tokenUsage());
+        assertEquals(-1, timings.lastPromptTokens());
+        assertTrue(timings.toLogLine().contains("tokens=-"), timings.toLogLine());
     }
 
     @Test

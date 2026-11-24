@@ -20,7 +20,7 @@ final class ChatResponses {
     }
 
     static String assistantText(HttpResponse<String> response) {
-        JsonObject message = firstMessage(response);
+        JsonObject message = parse(response).message();
 
         JsonElement content = message.get("content");
         if (content == null || content.isJsonNull()) {
@@ -34,7 +34,8 @@ final class ChatResponses {
 
     /** Decodes the first choice into text plus any {@code tool_calls} the model requested. */
     static AssistantTurn assistantTurn(HttpResponse<String> response) {
-        JsonObject message = firstMessage(response);
+        Parsed parsed = parse(response);
+        JsonObject message = parsed.message();
 
         JsonElement contentEl = message.get("content");
         String content = "";
@@ -49,10 +50,14 @@ final class ChatResponses {
         if (content.isEmpty() && toolCalls.isEmpty()) {
             throw new LlmException("LLM response message had no content");
         }
-        return new AssistantTurn(content, toolCalls);
+        return new AssistantTurn(content, toolCalls, TokenUsages.fromJson(parsed.root().get("usage")));
     }
 
-    private static JsonObject firstMessage(HttpResponse<String> response) {
+    /** The response body plus the first choice's message, already validated. */
+    private record Parsed(JsonObject root, JsonObject message) {
+    }
+
+    private static Parsed parse(HttpResponse<String> response) {
         int status = response.statusCode();
         String raw = response.body() == null ? "" : response.body();
 
@@ -76,7 +81,7 @@ final class ChatResponses {
         if (message == null || !message.isJsonObject()) {
             throw new LlmException("LLM response choice had no message object", status, raw);
         }
-        return message.getAsJsonObject();
+        return new Parsed(root, message.getAsJsonObject());
     }
 
     static List<ToolCall> parseToolCalls(JsonElement toolCallsEl) {

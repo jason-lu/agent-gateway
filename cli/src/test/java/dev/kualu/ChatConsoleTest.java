@@ -1,9 +1,11 @@
 package dev.kualu;
 
+import dev.kualu.llm.AssistantTurn;
 import dev.kualu.llm.ChatMessage;
 import dev.kualu.llm.client.LlmClient;
 import dev.kualu.llm.client.LlmConfig;
 import dev.kualu.llm.LlmException;
+import dev.kualu.llm.ToolSpec;
 import org.junit.jupiter.api.Test;
 
 import java.io.BufferedReader;
@@ -30,19 +32,22 @@ class ChatConsoleTest {
             super(new LlmConfig("http://test.local/v1", "key", "test-model"));
         }
 
+        /** Tool-loop turns arrive here in full mode ({@code chatCalls} records the console's full path). */
         @Override
-        public String chat(List<ChatMessage> messages, Integer maxTokens) {
+        public AssistantTurn complete(List<ChatMessage> messages, List<ToolSpec> tools) {
             chatCalls.add(messages);
             String last = messages.get(messages.size() - 1).content();
-            return "full-reply:" + last;
+            return new AssistantTurn("full-reply:" + last, List.of());
         }
 
+        /** Tool-loop turns arrive here in stream mode. */
         @Override
-        public String chatStream(List<ChatMessage> messages, Consumer<String> onDelta) {
+        public AssistantTurn completeStream(List<ChatMessage> messages, List<ToolSpec> tools,
+                Consumer<String> onDelta) {
             streamCalls.add(messages);
             onDelta.accept("Hel");
             onDelta.accept("lo");
-            return "Hello";
+            return new AssistantTurn("Hello", List.of());
         }
     }
 
@@ -108,7 +113,8 @@ class ChatConsoleTest {
     void llmError_isPrintedAndLoopContinues() {
         FakeLlmClient client = new FakeLlmClient() {
             @Override
-            public String chatStream(List<ChatMessage> messages, Consumer<String> onDelta) {
+            public AssistantTurn completeStream(List<ChatMessage> messages, List<ToolSpec> tools,
+                    Consumer<String> onDelta) {
                 streamCalls.add(messages);
                 throw new LlmException("LLM request failed with HTTP 429 (rate limited)");
             }
@@ -248,13 +254,13 @@ class ChatConsoleTest {
             boolean first = true;
 
             @Override
-            public String chat(List<ChatMessage> messages) {
+            public AssistantTurn complete(List<ChatMessage> messages, List<ToolSpec> tools) {
                 chatCalls.add(messages);
                 if (first) {
                     first = false;
                     throw new LlmException("boom");
                 }
-                return "ok:" + messages.size();
+                return new AssistantTurn("ok:" + messages.size(), List.of());
             }
         };
 
@@ -283,11 +289,13 @@ class ChatConsoleTest {
             return "SUMMARY-TEXT";
         }
 
+        /** Tool-loop turns (the summariser's {@code chat} override serves only compression). */
         @Override
-        public String chatStream(List<ChatMessage> messages, Consumer<String> onDelta) {
+        public AssistantTurn completeStream(List<ChatMessage> messages, List<ToolSpec> tools,
+                Consumer<String> onDelta) {
             streamCalls.add(messages);
             onDelta.accept("ok");
-            return "ok";
+            return new AssistantTurn("ok", List.of());
         }
     }
 
@@ -309,7 +317,9 @@ class ChatConsoleTest {
     @Test
     void longConversation_compressesBeforeBuildingThePayload() {
         CompressingLlm client = new CompressingLlm();
-        dev.kualu.llm.memory.MemoryCompressor compressor = new dev.kualu.llm.memory.MemoryCompressor(client, 6, 2, null, 4000);
+        // Each exchange is ~3 tokens ("turn-i" 2 + "ok" 1): threshold 10 lets three
+        // exchanges pass (9 tok) and folds exactly once, before the fourth turn.
+        dev.kualu.llm.memory.MemoryCompressor compressor = new dev.kualu.llm.memory.MemoryCompressor(client, 10, 2, null, 4000);
 
         StringBuilder input = new StringBuilder();
         for (int i = 0; i < 5; i++) {
@@ -346,10 +356,11 @@ class ChatConsoleTest {
     void history_stillShowsNonSystemTurnsThatStartWithTheMarker() {
         FakeLlmClient client = new FakeLlmClient() {
             @Override
-            public String chatStream(List<ChatMessage> messages, Consumer<String> onDelta) {
+            public AssistantTurn completeStream(List<ChatMessage> messages, List<ToolSpec> tools,
+                    Consumer<String> onDelta) {
                 streamCalls.add(messages);
                 onDelta.accept("ok");
-                return "ok";
+                return new AssistantTurn("ok", List.of());
             }
         };
 

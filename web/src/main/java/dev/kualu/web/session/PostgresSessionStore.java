@@ -71,7 +71,7 @@ public class PostgresSessionStore implements SessionStore {
     }
 
     private record RawMessage(int seq, String role, String content, String toolCallId,
-                              String toolCalls, String images) {
+                              String toolCalls, String images, String usage) {
     }
 
     @Override
@@ -112,7 +112,7 @@ public class PostgresSessionStore implements SessionStore {
         RawSession raw = rows.get(0);
         long decodeStart = System.nanoTime();
         List<RawMessage> messages = jdbc.query(
-                "select seq, role, content, tool_call_id, tool_calls, images "
+                "select seq, role, content, tool_call_id, tool_calls, images, token_usage "
                         + "from agent.session_messages where session_id = ?::uuid order by seq",
                 (rs, rowNum) -> new RawMessage(
                         rs.getInt("seq"),
@@ -120,14 +120,15 @@ public class PostgresSessionStore implements SessionStore {
                         rs.getString("content"),
                         rs.getString("tool_call_id"),
                         rs.getString("tool_calls"),
-                        rs.getString("images")),
+                        rs.getString("images"),
+                        rs.getString("token_usage")),
                 sessionId);
         List<ChatMessage> decoded = new ArrayList<>(messages.size());
         int chars = 0;
         for (RawMessage message : messages) {
             decoded.add(codec.decode(new ChatMessageCodec.Encoded(
                     message.role(), message.content(), message.toolCallId(),
-                    message.toolCalls(), message.images())));
+                    message.toolCalls(), message.images(), message.usage())));
             chars += message.content().length();
         }
         Session loaded = new Session(raw.id(), raw.owner(), raw.createdAt(), raw.title(),
@@ -228,6 +229,7 @@ public class PostgresSessionStore implements SessionStore {
         String[] toolCallIds = new String[size];
         String[] toolCalls = new String[size];
         String[] images = new String[size];
+        String[] usages = new String[size];
         long encodeStart = System.nanoTime();
         int chars = 0;
         for (int i = 0; i < size; i++) {
@@ -238,6 +240,7 @@ public class PostgresSessionStore implements SessionStore {
             toolCallIds[i] = encoded.toolCallId();
             toolCalls[i] = encoded.toolCalls();
             images[i] = encoded.images();
+            usages[i] = encoded.usage();
             chars += encoded.content().length();
         }
         long encodeMs = elapsedMs(encodeStart);
@@ -248,14 +251,14 @@ public class PostgresSessionStore implements SessionStore {
                         + "where id = ?::uuid and owner = ?"
                         + ") "
                         + "insert into agent.session_messages "
-                        + "(session_id, seq, role, content, tool_call_id, tool_calls, images) "
+                        + "(session_id, seq, role, content, tool_call_id, tool_calls, images, token_usage) "
                         + "select s.id, u.seq, u.role, u.content, u.tool_call_id, "
-                        + "u.tool_calls::jsonb, u.images::jsonb "
+                        + "u.tool_calls::jsonb, u.images::jsonb, u.token_usage::jsonb "
                         + "from agent.sessions s "
-                        + "cross join unnest(?::int[], ?::text[], ?::text[], ?::text[], ?::text[], ?::text[]) "
-                        + "as u(seq, role, content, tool_call_id, tool_calls, images) "
+                        + "cross join unnest(?::int[], ?::text[], ?::text[], ?::text[], ?::text[], ?::text[], ?::text[]) "
+                        + "as u(seq, role, content, tool_call_id, tool_calls, images, token_usage) "
                         + "where s.id = ?::uuid and s.owner = ?",
-                new Object[]{title, sessionId, owner, seqs, roles, contents, toolCallIds, toolCalls, images,
+                new Object[]{title, sessionId, owner, seqs, roles, contents, toolCallIds, toolCalls, images, usages,
                         sessionId, owner});
         TurnTimings.recordPersist(encodeMs, elapsedMs(writeStart), chars);
     }
@@ -301,7 +304,7 @@ public class PostgresSessionStore implements SessionStore {
                 }
             }
             out.add(new ChatMessage(message.role(), message.content(), message.toolCallId(),
-                    message.toolCalls(), replaced));
+                    message.toolCalls(), replaced, message.usage()));
         }
         return out;
     }
