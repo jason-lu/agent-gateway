@@ -11,9 +11,11 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -26,6 +28,7 @@ class MemoryCompressorTest {
         final List<Integer> maxTokensCalls = new ArrayList<>();
         List<String> replies = List.of("SUMMARY");
         RuntimeException failure;
+        int failCalls;
 
         StubLlm() {
             super(new LlmConfig("http://localhost", "key", "model"));
@@ -39,8 +42,23 @@ class MemoryCompressorTest {
             if (failure != null) {
                 throw failure;
             }
+            if (calls.size() <= failCalls) {
+                throw new LlmException("boom " + calls.size(), 500, "body");
+            }
             return replies.get(Math.min(calls.size() - 1, replies.size() - 1));
         }
+    }
+
+    /** A digester reply covering exactly {@code ids}. */
+    private static String digestJson(String... ids) {
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < ids.length; i++) {
+            if (i > 0) {
+                sb.append(',');
+            }
+            sb.append("{\"toolCallId\":\"").append(ids[i]).append("\",\"digest\":\"D").append(i).append("\"}");
+        }
+        return sb.append(']').toString();
     }
 
     private static ConversationMemory conversation(int exchanges, String systemPrompt) {
@@ -624,5 +642,262 @@ class MemoryCompressorTest {
 
         ChatMessage withImages = ChatMessage.user("what", List.of("data:image/png;base64,AAAA"));
         assertEquals(1 + MemoryCompressor.IMAGE_TOKENS, MemoryCompressor.messageTokens(withImages));
+    }
+
+    // ---- stage 1: tool digests -----------------------------------------
+
+    @Test
+    void toolDigest_underThresholdAfterDigest_skipsTheConversationFold() {
+        StubLlm llm = new StubLlm();
+        llm.replies = List.of(digestJson("call_0", "call_1", "call_2"));
+        MemoryCompressor compressor = new MemoryCompressor(llm, 500, 100, null, 4000);
+        String fat = "x".repeat(1000); // ~250 tok per result
+        ConversationMemory memory = new ConversationMemory();
+        memory.addSystem("sys");
+        memory.addUser("u0");
+        memory.addTool(fat, "call_0");
+        memory.addTool(fat, "call_1");
+        memory.addTool(fat, "call_2");
+        memory.addAssistant("a0");
+
+        assertTrue(compressor.maybeCompress(memory, "test"));
+        assertEquals(1, llm.calls.size(), "only the digest stage runs once the tools are digested");
+
+        List<ChatMessage> after = memory.messages();
+        assertEquals("u0", after.get(1).content(), "conversation turns stay verbatim");
+        assertEquals("a0", after.get(5).content(), "conversation turns stay verbatim");
+        assertEquals(MemoryCompressor.TOOL_DIGEST_PREFIX + "D0", after.get(2).content());
+        assertEquals(MemoryCompressor.TOOL_DIGEST_PREFIX + "D1", after.get(3).content());
+        assertEquals(MemoryCompressor.TOOL_DIGEST_PREFIX + "D2", after.get(4).content());
+        assertEquals("call_1", after.get(3).toolCallId(), "the tool-call pairing survives");
+        assertTrue(after.stream().noneMatch(m -> m.content().startsWith(MemoryCompressor.SUMMARY_PREFIX)),
+                "the conversation fold must not run when digests already fit");
+    }
+
+    @Test
+    void toolDigest_stillOverThreshold_foldsTheConversationNext() {
+        StubLlm llm = new StubLlm();
+        llm.replies = List.of(digestJson("call_1", "call_2"), "FOLD-SUMMARY");
+        MemoryCompressor compressor = new MemoryCompressor(llm, 2000, 200, null, 4000);
+        String fatTurn = "x".repeat(2000); // ~500 tok
+        String fatTool = "y".repeat(1000); // ~250 tok
+        ConversationMemory memory = new ConversationMemory();
+        memory.addSystem("sys");
+        memory.addUser(fatTurn);
+        memory.addAssistant(fatTurn);
+        memory.addUser(fatTurn);
+        memory.addTool(fatTool, "call_1");
+        memory.addAssistant(fatTurn);
+        memory.addUser(fatTurn);
+        memory.addTool(fatTool, "call_2");
+        memory.addAssistant(fatTurn);
+
+        assertTrue(compressor.maybeCompress(memory, "test"));
+        assertEquals(2, llm.calls.size(), "one digest pass, then the fold");
+        assertTrue(llm.userPayloads.get(0).contains("(toolCallId=call_1)"), "first call digests the tools");
+        assertFalse(llm.userPayloads.get(0).contains("FOLD-SUMMARY"));
+
+        List<ChatMessage> after = memory.messages();
+        List<ChatMessage> markers = after.stream()
+                .filter(m -> m.content().startsWith(MemoryCompressor.SUMMARY_PREFIX))
+                .toList();
+        assertEquals(1, markers.size(), "the fold lands exactly one summary marker");
+        assertTrue(markers.get(0).content().contains("FOLD-SUMMARY"));
+        assertTrue(after.get(4).content().startsWith(MemoryCompressor.TOOL_DIGEST_PREFIX),
+                "stage 1 digests land before stage 2 folds");
+    }
+
+    @Test
+    void toolDigest_stopsTheLadderEvenWhenMeasuredUsageIsStale() {
+        StubLlm llm = new StubLlm();
+        llm.replies = List.of(digestJson("call_0"));
+        MemoryCompressor compressor = new MemoryCompressor(llm, 500, 100, null, 4000);
+        // The measured usage says 10000 prompt tokens (the request that ran before
+        // the digest); the post-digest text estimate is tiny. The ladder must stop.
+        ConversationMemory memory = new ConversationMemory().replaceAll(List.of(
+                ChatMessage.user("hi"),
+                ChatMessage.assistantToolCalls("",
+                        List.of(new ToolCall("call_0", "web_search", "{}")),
+                        new TokenUsage(10000, 1, 10001, 0, 0)),
+                ChatMessage.tool("x".repeat(1000), "call_0"),
+                ChatMessage.assistant("done", new TokenUsage(10000, 1, 10001, 0, 0))));
+
+        assertTrue(compressor.shouldCompress(memory), "measured usage crosses the threshold");
+        assertTrue(compressor.maybeCompress(memory, "test"));
+        assertEquals(1, llm.calls.size(), "the fold is skipped: digests already fit");
+        assertTrue(memory.messages().stream()
+                .noneMatch(m -> m.content().startsWith(MemoryCompressor.SUMMARY_PREFIX)));
+    }
+
+    @Test
+    void toolDigest_skipsSmallAndAlreadyDigestedResults() {
+        StubLlm llm = new StubLlm();
+        MemoryCompressor compressor = new MemoryCompressor(llm, 100, 20, null, 4000);
+        ConversationMemory memory = new ConversationMemory();
+        memory.addSystem("sys");
+        memory.addUser("u0");
+        memory.addTool("tiny", "call_0");
+        memory.addTool(MemoryCompressor.TOOL_DIGEST_PREFIX + "done", "call_1");
+        memory.addTool("x".repeat(1000), "call_2");
+        memory.addAssistant("a0");
+
+        MemoryCompressor.ToolDigestPlan plan = compressor.prepareToolDigest(memory);
+        assertEquals(1, plan.batches().size());
+        assertEquals(List.of("call_2"), plan.batches().get(0).toolCallIds(),
+                "terse and already-digested results are left alone");
+    }
+
+    @Test
+    void toolDigest_nothingWorthDigesting_returnsNull() {
+        StubLlm llm = new StubLlm();
+        MemoryCompressor compressor = new MemoryCompressor(llm, 100, 20, null, 4000);
+        ConversationMemory memory = new ConversationMemory();
+        memory.addSystem("sys");
+        memory.addUser("x".repeat(4000));
+        memory.addTool("tiny", "call_0");
+        memory.addAssistant("a0");
+
+        assertNull(compressor.prepareToolDigest(memory));
+    }
+
+    @Test
+    void toolDigestFailure_leavesToolsRaw_foldStillRuns() {
+        StubLlm llm = new StubLlm();
+        llm.failCalls = 1; // the digest call blows up, the fold call succeeds
+        llm.replies = List.of("FOLD-SUMMARY");
+        MemoryCompressor compressor = new MemoryCompressor(llm, 2000, 200, null, 4000);
+        String fatTurn = "x".repeat(2000);
+        String fatTool = "y".repeat(1000);
+        ConversationMemory memory = new ConversationMemory();
+        memory.addSystem("sys");
+        memory.addUser(fatTurn);
+        memory.addTool(fatTool, "call_1");
+        memory.addAssistant(fatTurn);
+        memory.addUser(fatTurn);
+        memory.addAssistant(fatTurn);
+
+        assertTrue(compressor.maybeCompress(memory, "test"));
+        assertEquals(2, llm.calls.size(), "the fold runs after the failed digest pass");
+        List<ChatMessage> after = memory.messages();
+        assertTrue(after.stream()
+                        .anyMatch(m -> "tool".equals(m.role()) && m.content().equals(fatTool)),
+                "a failed digest leaves the raw tool result untouched");
+        assertTrue(after.stream().anyMatch(m -> m.content().startsWith(MemoryCompressor.SUMMARY_PREFIX)),
+                "the conversation fold is not blocked by a failed digest");
+    }
+
+    @Test
+    void toolDigestUnparseableReply_fallsThroughToTheFold() {
+        StubLlm llm = new StubLlm();
+        llm.replies = List.of("SUMMARY", "FOLD-SUMMARY");
+        MemoryCompressor compressor = new MemoryCompressor(llm, 2000, 200, null, 4000);
+        String fatTurn = "x".repeat(2000);
+        ConversationMemory memory = new ConversationMemory();
+        memory.addSystem("sys");
+        memory.addUser(fatTurn);
+        memory.addTool("y".repeat(1000), "call_1");
+        memory.addAssistant(fatTurn);
+        memory.addUser(fatTurn);
+        memory.addAssistant(fatTurn);
+
+        assertTrue(compressor.maybeCompress(memory, "test"));
+        assertEquals(2, llm.calls.size());
+        List<ChatMessage> after = memory.messages();
+        assertTrue(after.stream()
+                        .anyMatch(m -> "tool".equals(m.role()) && m.content().startsWith("yyy")),
+                "an unparseable digest reply changes nothing");
+        assertTrue(after.stream().anyMatch(m -> m.content().startsWith(MemoryCompressor.SUMMARY_PREFIX)));
+    }
+
+    @Test
+    void toolDigestPartialIds_leavesUnmatchedResultsRaw() {
+        StubLlm llm = new StubLlm();
+        llm.replies = List.of(digestJson("call_0"));
+        MemoryCompressor compressor = new MemoryCompressor(llm, 600, 100, null, 4000);
+        ConversationMemory memory = new ConversationMemory();
+        memory.addSystem("sys");
+        memory.addUser("u0");
+        memory.addTool("x".repeat(2000), "call_0");
+        memory.addTool("y".repeat(2000), "call_1");
+        memory.addAssistant("a0");
+
+        assertTrue(compressor.maybeCompress(memory, "test"));
+        List<ChatMessage> after = memory.messages();
+        assertEquals(MemoryCompressor.TOOL_DIGEST_PREFIX + "D0", after.get(2).content());
+        assertEquals("y".repeat(2000), after.get(3).content(),
+                "ids the summariser never echoed stay raw");
+    }
+
+    @Test
+    void toolDigest_isBatchedWhenResultsOverflowOneRequest() {
+        ConversationMemory memory = new ConversationMemory();
+        memory.addSystem("sys");
+        memory.addUser("u0");
+        for (int i = 0; i < 25; i++) {
+            memory.addTool("x".repeat(1000), "call_" + i);
+        }
+        memory.addAssistant("a0");
+
+        StubLlm llm = new StubLlm();
+        MemoryCompressor compressor = new MemoryCompressor(llm, 1000, 100, null, 4000);
+
+        MemoryCompressor.ToolDigestPlan plan = compressor.prepareToolDigest(memory);
+        assertEquals(2, plan.batches().size(), "25 results split at the batch cap");
+        assertEquals(24, plan.batches().get(0).toolCallIds().size());
+        assertEquals(List.of("call_24"), plan.batches().get(1).toolCallIds());
+
+        llm.replies = List.of(
+                digestJson(plan.batches().get(0).toolCallIds().toArray(String[]::new)),
+                digestJson(plan.batches().get(1).toolCallIds().toArray(String[]::new)));
+        assertTrue(compressor.maybeCompress(memory, "test"));
+        assertEquals(2, llm.calls.size(), "one call per batch, no fold needed");
+    }
+
+    @Test
+    void toolDigestPrompt_carriesIdsNamesAndAbbreviatesInput() {
+        String prompt = MemoryCompressor.toolDigestPrompt(List.of(
+                new MemoryCompressor.ToolTarget("call_1", "web_search", "x".repeat(9000))));
+
+        assertTrue(prompt.contains("[Tool results]"));
+        assertTrue(prompt.contains("(toolCallId=call_1)"));
+        assertTrue(prompt.contains("(tool: web_search)"));
+        assertTrue(prompt.contains("x".repeat(MemoryCompressor.MAX_DIGEST_INPUT_CHARS)),
+                "the raw result is capped for the digest request");
+        assertTrue(prompt.contains("[truncated"));
+        assertFalse(prompt.contains("x".repeat(MemoryCompressor.MAX_DIGEST_INPUT_CHARS + 1)));
+    }
+
+    @Test
+    void summarizePrompt_passesDigestedToolResultsWhole() {
+        String digest = MemoryCompressor.TOOL_DIGEST_PREFIX + "d".repeat(300);
+        String prompt = MemoryCompressor.summarizePrompt(null, List.of(ChatMessage.tool(digest, "c1")));
+
+        assertTrue(prompt.contains(digest), "digests are already bounded — the fold reads them whole");
+    }
+
+    @Test
+    void parseDigests_acceptsFencesAndProse_dropsBadEntries() {
+        assertEquals(Map.of("c1", "one", "c2", "two"), MemoryCompressor.parseDigests(
+                "```json\n[{\"toolCallId\":\"c1\",\"digest\":\"one\"},{\"toolCallId\":\"c2\",\"digest\":\"two\"}]\n```"));
+        assertEquals(Map.of("c1", "one"), MemoryCompressor.parseDigests(
+                "Here you go: [{\"toolCallId\":\"c1\",\"digest\":\"one\"}] done"));
+        assertEquals(Map.of("c1", "one"), MemoryCompressor.parseDigests(
+                "[{\"toolCallId\":\"c1\",\"digest\":\"one\"},{\"toolCallId\":\"c2\"},{\"digest\":\"x\"},\"junk\"]"));
+    }
+
+    @Test
+    void parseDigests_unparseableReplyYieldsEmpty() {
+        assertTrue(MemoryCompressor.parseDigests(null).isEmpty());
+        assertTrue(MemoryCompressor.parseDigests("").isEmpty());
+        assertTrue(MemoryCompressor.parseDigests("SUMMARY").isEmpty());
+        assertTrue(MemoryCompressor.parseDigests("[not json]").isEmpty());
+    }
+
+    @Test
+    void defaultToolDigestInstruction_isLoadedFromItsResource() {
+        assertTrue(MemoryCompressor.DEFAULT_TOOL_DIGEST_INSTRUCTION.contains("JSON array"),
+                "the instruction must be read from "
+                        + MemoryCompressor.DEFAULT_TOOL_DIGEST_INSTRUCTION_RESOURCE);
+        assertFalse(MemoryCompressor.DEFAULT_TOOL_DIGEST_INSTRUCTION.isBlank());
     }
 }

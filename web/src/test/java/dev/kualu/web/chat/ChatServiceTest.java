@@ -31,11 +31,13 @@ class ChatServiceTest {
 
     /**
      * Turns answer {@code REPLY} and record the payload; {@code chat} serves the
-     * memory summariser and answers {@code SUMMARY-TEXT}.
+     * memory summariser and answers {@code SUMMARY-TEXT} (or {@code chatReply}
+     * when set).
      */
     static final class RecordingLlm extends LlmClient {
         final List<List<ChatMessage>> replyPayloads = new ArrayList<>();
         RuntimeException summarizeFailure;
+        String chatReply = "SUMMARY-TEXT";
 
         RecordingLlm() {
             super(new LlmConfig("http://localhost", "key", "model"));
@@ -46,7 +48,7 @@ class ChatServiceTest {
             if (summarizeFailure != null) {
                 throw summarizeFailure;
             }
-            return "SUMMARY-TEXT";
+            return chatReply;
         }
 
         @Override
@@ -218,6 +220,37 @@ class ChatServiceTest {
                 "folded turns must stay in the history");
         assertEquals(24, service.history(session).size(),
                 "history must show every user/assistant turn, folded or not");
+    }
+
+    @Test
+    void toolDigestAfterTheTurn_replacesBulkyToolResultsWithoutFolding() {
+        InMemorySessionStore store = new InMemorySessionStore();
+        Session session = store.create("ada", "sys");
+        session.memory().addUser("u0");
+        session.memory().addAssistant("a0");
+        session.memory().addUser("u1");
+        session.memory().addTool("x".repeat(1000), "call-1"); // ~250 tokens
+        session.memory().addAssistant("a1");
+
+        RecordingLlm llm = new RecordingLlm();
+        llm.chatReply = "[{\"toolCallId\":\"call-1\",\"digest\":\"D\"}]";
+        ChatService service = new ChatService(
+                store,
+                llmSettings(llm),
+                compressorProvider(new MemoryCompressor(llm, 200, 100, null, 4000)),
+                List.of(), emptyMcpProvider(), emptyUserMcpProvider(), testMetrics(), disabledModeration(), Runnable::run);
+
+        assertEquals("REPLY", service.chat(session, "new question", null, null, null));
+
+        assertTrue(session.memory().messages().stream()
+                        .anyMatch(m -> "tool".equals(m.role())
+                                && m.content().equals(MemoryCompressor.TOOL_DIGEST_PREFIX + "D")),
+                "the bulky tool result is digested after the turn");
+        assertTrue(session.memory().messages().stream().noneMatch(m -> m.content().startsWith("x")),
+                "the raw tool dump is replaced, not merely hidden");
+        assertTrue(session.memory().context().stream()
+                        .noneMatch(m -> m.content().startsWith(MemoryCompressor.SUMMARY_PREFIX)),
+                "digests that already fit skip the conversation fold");
     }
 
     @Test

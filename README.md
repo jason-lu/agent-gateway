@@ -117,25 +117,29 @@ The console keeps multi-turn memory in session: each message is sent with prior 
 
 ### Memory compression
 
-By default the full history is sent with every request, so long conversations grow without bound. Enable compression (on by default) to keep the payload bounded:
+By default the full history is sent with every request, so long conversations grow without bound. Enable compression (on by default) to keep the payload bounded. Compression runs as a **two-stage ladder** once the context's **token occupancy** passes `max-tokens` (default 500000) — the occupancy is the newest assistant turn's measured `usage.promptTokens` (the request that call actually carried) when the upstream reports one, and falls back to a CJK-aware text estimate of the context when it does not:
 
-- Compression only shrinks the context sent to the model — the stored history keeps every turn, so `/history` and `GET /api/v1/sessions/{id}/messages` still show the whole conversation.
-- When the context's **token occupancy** passes `max-tokens` (default 500000), the oldest turns are folded into a single summary message. The occupancy is the newest assistant turn's measured `usage.promptTokens` (the request that call actually carried) when the upstream reports one, and falls back to a CJK-aware text estimate of the context when it does not.
-- The most recent turns that fit the `keep-tokens` budget (default 4096) stay verbatim; the cut never splits a turn and never orphans a tool result.
-- The summary is regenerated incrementally — the previous summary plus the turns that just aged out — so the cost does not grow with the conversation.
-- The summarisation input is bounded too: each folded turn is truncated before the summary prompt is built (user/assistant at 2000 chars, `tool` results at 240 chars), so raw web-search dumps can't drown out the real questions.
+1. **Tool digests first.** Every `tool` result in the context that is longer than 600 chars is condensed by a summarisation pass (one bounded call per batch of results, digest budget 400 chars each) and its content is replaced in place by a `【工具结果摘要】` digest — the `toolCallId` stays, so the tool-call pairing in the request remains valid. Conversation turns stay verbatim. When the digests alone bring the context back under `max-tokens`, nothing else is compressed. Raw tool dumps are data rather than conversation, and their raw text is the one thing compression rewrites in the stored history; user/assistant turns are never touched. Terse results (≤ 600 chars) cannot shrink and are left as-is.
+2. **Conversation fold only when that is not enough.** The oldest turns are folded into a single summary message; the most recent turns that fit the `keep-tokens` budget (default 4096) stay verbatim, the cut never splits a turn and never orphans a tool result. The summary is regenerated incrementally — the previous summary plus the turns that just aged out — so the cost does not grow with the conversation.
+
+Other properties:
+
+- `/history` and `GET /api/v1/sessions/{id}/messages` still show every user/assistant turn. The summary carries the `【历史对话摘要】` marker and is hidden from both.
+- The summarisation input is bounded too: each folded turn is truncated before the summary prompt is built (user/assistant at 2000 chars, raw `tool` results at 240 chars), so raw web-search dumps can't drown out the real questions. Already-digested tool results are passed through whole — they are bounded and dense by construction. The digest input caps each raw result at 8000 chars and splits into batches so one call never carries an unbounded dump.
 - The summary body is capped at `max-summary-chars` (default 4000): the summarisation call passes the same number as `max_tokens`, and any overlong output is truncated, so the payload stays bounded even over very long sessions.
-- Request layout: `[tool policy][system prompt][summary][recent turns]`. The tool policy (a standing system message from `tool-policy.txt`) leads the request only while tools are on offer and is never stored. The summary carries the `【历史对话摘要】` marker and is hidden from `/history` and from `GET /api/v1/sessions/{id}/messages`.
-- Compression runs **after** the turn, on a background thread, so the user never waits for the summariser: the turn that crosses the threshold pays one uncompressed payload, and the next turn already sees the folded context. The fold is prepared and applied under the session lock; the summarisation call runs outside it. If the summarisation call fails the history is left untouched and the next turn retries.
+- Request layout: `[tool policy][system prompt][summary][recent turns]`. The tool policy (a standing system message from `tool-policy.txt`) leads the request only while tools are on offer and is never stored.
+- Both stages run **after** the turn, on a background thread, so the user never waits for the summariser: the turn that crosses the threshold pays one uncompressed payload, and the next turn already sees the compressed context. Each stage is prepared and applied under the session lock; the summarisation calls run outside it. A failed digest leaves the raw tool results alone and falls through to the fold; a failed fold leaves the history untouched. The next turn retries.
+- The post-digest decision ("did stage 1 already fit?") uses the text estimate rather than the measured `usage.promptTokens`, because the measurement describes the request that ran *before* the digests shrank anything.
 
-The summarisation prompt lives in its own file so it can be tuned without touching code:
-`llm-core/src/main/resources/dev/kualu/llm/summarize-instruction.txt`. Override it per deployment with `AGENT_MEMORY_INSTRUCTION` / `agent.memory.instruction` (a blank value falls back to the file).
+The summarisation prompts live in their own files so they can be tuned without touching code:
+`llm-core/src/main/resources/dev/kualu/llm/memory/summarize-instruction.txt` (conversation fold, override with `AGENT_MEMORY_INSTRUCTION` / `agent.memory.instruction`) and `tool-digest-instruction.txt` (tool digests).
 
 Logs (slf4j; `web` uses logback, `cli` prints to stderr via `slf4j-simple`):
 
 | Event | Level |
 |---|---|
-| Compression succeeded (`context 24 msgs/~12k tok -> 6 msgs/~2k tok (folded 14 turns, …)`) | `INFO` |
+| Conversation fold succeeded (`context 24 msgs/~12k tok -> 6 msgs/~2k tok (folded 14 turns, …)`) | `INFO` |
+| Tool digest applied (`tool digest applied to 12 result(s) (96000 -> 3100 chars, 2 batches)`) | `INFO` |
 | Summarisation failed, history unchanged | `WARN` |
 | Skipped (no legal cut point) | `DEBUG` |
 | Thresholds loaded at startup | `INFO` |

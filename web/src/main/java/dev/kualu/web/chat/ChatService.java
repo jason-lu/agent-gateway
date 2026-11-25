@@ -26,6 +26,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
@@ -288,8 +289,10 @@ public class ChatService {
 
     /**
      * Best-effort compression after the turn: never on the user's critical path.
-     * The plan is snapshotted under the session lock, the summarisation call runs
-     * outside it, and the fold (plus a persist) is applied under the lock again.
+     * Two stages: bulky tool results are digested first, and the conversation is
+     * folded into the summary only when that is not enough. Each stage snapshots
+     * its plan under the session lock, runs the summarisation call outside it,
+     * and applies (plus a persist) under the lock again.
      */
     private void scheduleCompress(Session session) {
         if (compressor == null || !compressor.shouldCompress(session.memory())) {
@@ -306,23 +309,14 @@ public class ChatService {
         boolean fired = false;
         int summaryChars = 0;
         try {
-            MemoryCompressor.FoldPlan plan;
-            synchronized (session.memory()) {
-                plan = compressor.prepare(session.memory());
+            summaryChars += runToolDigest(session);
+            if (summaryChars > 0 && !compressor.stillOverThreshold(session.memory())) {
+                fired = true;
+            } else {
+                int foldChars = runFold(session);
+                summaryChars += foldChars;
+                fired = summaryChars > 0;
             }
-            if (plan == null) {
-                return;
-            }
-            String summary = compressor.summarize(plan);
-            synchronized (session.memory()) {
-                fired = compressor.apply(session.memory(), plan, summary);
-                if (fired) {
-                    // The fold marker moved mid-history: positional appends are
-                    // invalid now, so this persists the full reshuffled list.
-                    persistRewrittenQuietly(session);
-                }
-            }
-            summaryChars = summary == null ? 0 : Math.min(summary.length(), plan.maxTokens());
         } catch (RuntimeException ex) {
             log.warn("async memory-compress failed for session={}; history left unchanged", session.id(), ex);
         } finally {
@@ -330,6 +324,63 @@ public class ChatService {
             turnMetrics.complete("compress", session.id(), timings);
             TurnTimings.clear();
         }
+    }
+
+    /** Stage 1: condense bulky tool results in place. Returns digest chars written (0 = skipped/failed). */
+    private int runToolDigest(Session session) {
+        try {
+            MemoryCompressor.ToolDigestPlan plan;
+            synchronized (session.memory()) {
+                plan = compressor.prepareToolDigest(session.memory());
+            }
+            if (plan == null) {
+                return 0;
+            }
+            Map<String, String> digests = compressor.summarizeToolDigest(plan);
+            if (digests.isEmpty()) {
+                return 0;
+            }
+            boolean applied;
+            synchronized (session.memory()) {
+                applied = compressor.applyToolDigest(session.memory(), plan, digests);
+                if (applied) {
+                    // Digests rewrite message contents in place: append-only
+                    // persistence cannot express that, so rewrite the full list.
+                    persistRewrittenQuietly(session);
+                }
+            }
+            if (!applied) {
+                return 0;
+            }
+            return digests.values().stream()
+                    .mapToInt(d -> Math.min(d.strip().length(), plan.maxDigestChars()))
+                    .sum();
+        } catch (RuntimeException ex) {
+            log.warn("async tool-digest failed for session={}; tool results left unchanged", session.id(), ex);
+            return 0;
+        }
+    }
+
+    /** Stage 2: fold older turns into the summary. Returns summary chars written (0 = skipped/failed). */
+    private int runFold(Session session) {
+        MemoryCompressor.FoldPlan plan;
+        synchronized (session.memory()) {
+            plan = compressor.prepare(session.memory());
+        }
+        if (plan == null) {
+            return 0;
+        }
+        String summary = compressor.summarize(plan);
+        boolean fired;
+        synchronized (session.memory()) {
+            fired = compressor.apply(session.memory(), plan, summary);
+            if (fired) {
+                // The fold marker moved mid-history: positional appends are
+                // invalid now, so this persists the full reshuffled list.
+                persistRewrittenQuietly(session);
+            }
+        }
+        return fired ? Math.min(summary == null ? 0 : summary.length(), plan.maxTokens()) : 0;
     }
 
     /**
