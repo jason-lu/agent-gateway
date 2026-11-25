@@ -6,7 +6,11 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import dev.kualu.llm.AgentTool;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.util.HexFormat;
 import java.util.Objects;
 
 /**
@@ -47,14 +51,46 @@ public final class McpToolAdapter implements AgentTool {
      * Builds the name the model sees: {@code mcp_<server>_<tool>}, cleaned to the
      * OpenAI function-name charset and length. The original name is carried in the
      * description and sent to the server unchanged.
+     *
+     * <p>Non-ASCII characters carry no information after cleaning (every CJK tool
+     * name would collapse to the same run of {@code _}), so a name containing any
+     * gets a stable digest of the original {@code server/tool} appended instead —
+     * distinct tools stay distinct, and the name is the same across restarts.
+     * Pure-ASCII names keep their existing readable form.
      */
     static String exposeName(String serverName, String toolName) {
-        String cleaned = ("mcp_" + serverName + "_" + toolName).replaceAll("[^A-Za-z0-9_-]", "_");
+        String raw = "mcp_" + serverName + "_" + toolName;
+        String cleaned = raw.replaceAll("[^A-Za-z0-9_-]", "_");
+        if (!isAscii(raw)) {
+            String suffix = "_" + digest(serverName + "/" + toolName);
+            String readable = cleaned.replaceAll("_{2,}", "_").replaceAll("_+$", "");
+            int keep = Math.min(readable.length(), MAX_NAME_LENGTH - suffix.length());
+            return readable.substring(0, keep) + suffix;
+        }
         if (cleaned.length() <= MAX_NAME_LENGTH) {
             return cleaned;
         }
         String suffix = String.format("%04x", cleaned.hashCode() & 0xffff);
         return cleaned.substring(0, MAX_NAME_LENGTH - 5) + "_" + suffix;
+    }
+
+    private static boolean isAscii(String text) {
+        for (int i = 0; i < text.length(); i++) {
+            if (text.charAt(i) > 0x7F) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** First 8 hex chars of SHA-256 over the UTF-8 bytes. */
+    private static String digest(String text) {
+        try {
+            byte[] hash = MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(hash, 0, 4);
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException("SHA-256 unavailable", ex);
+        }
     }
 
     @Override

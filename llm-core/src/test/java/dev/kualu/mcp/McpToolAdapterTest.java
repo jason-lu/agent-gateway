@@ -5,8 +5,13 @@ import com.google.gson.JsonObject;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -29,6 +34,41 @@ class McpToolAdapterTest {
         assertEquals(64, name.length());
         assertTrue(name.startsWith("mcp_"));
         assertTrue(name.matches("[A-Za-z0-9_-]+"));
+    }
+
+    @Test
+    void nonAsciiToolNamesStayDistinctAndValid() {
+        // Same shape as the DashScope moji_weather server: all-CJK, equal-length names.
+        List<String> toolNames = List.of("短时预报", "实时天气", "空气质量", "限行数据", "生活指数");
+        Set<String> exposed = new HashSet<>();
+        for (String toolName : toolNames) {
+            String name = McpToolAdapter.exposeName("moji_weather", toolName);
+            assertTrue(name.matches("[A-Za-z0-9_-]{1,64}"), name);
+            assertTrue(name.startsWith("mcp_moji_weather_"), name);
+            assertFalse(name.contains("__"), name);
+            exposed.add(name);
+        }
+        assertEquals(toolNames.size(), exposed.size());
+    }
+
+    @Test
+    void nonAsciiNamesAreStableAndKeepTheirAsciiPart() {
+        assertEquals(McpToolAdapter.exposeName("moji_weather", "短时预报"),
+                McpToolAdapter.exposeName("moji_weather", "短时预报"));
+        assertTrue(McpToolAdapter.exposeName("moji_weather", "AQI预报")
+                .matches("mcp_moji_weather_AQI_[0-9a-f]{8}"));
+        // A non-ASCII server name gets the same treatment.
+        assertTrue(McpToolAdapter.exposeName("天气", "forecast")
+                .matches("mcp_forecast_[0-9a-f]{8}"));
+    }
+
+    @Test
+    void longNonAsciiNamesKeepTheDigestWithin64() {
+        String a = McpToolAdapter.exposeName("averyveryverylongservername", "averyveryverylongtoolname预报一");
+        String b = McpToolAdapter.exposeName("averyveryverylongservername", "averyveryverylongtoolname预报二");
+        assertTrue(a.length() <= 64, a);
+        assertTrue(a.matches("[A-Za-z0-9_-]+_[0-9a-f]{8}"), a);
+        assertNotEquals(a, b);
     }
 
     @Test
