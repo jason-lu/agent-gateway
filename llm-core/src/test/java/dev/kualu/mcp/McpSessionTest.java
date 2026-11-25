@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
@@ -124,6 +125,76 @@ class McpSessionTest {
         McpSession session = opened(transport);
         List<McpRemoteTool> tools = session.listTools(TIMEOUT);
         assertEquals(List.of("first", "second"), tools.stream().map(McpRemoteTool::name).toList());
+    }
+
+    /** DashScope replies {@code "nextCursor":""} on the last page; that must end the listing. */
+    @Test
+    void listToolsStopsOnEmptyNextCursor() {
+        FakeMcpTransport transport = new FakeMcpTransport();
+        AtomicInteger listCalls = new AtomicInteger();
+        transport.responder = message -> {
+            if (!"tools/list".equals(message.get("method").getAsString())) {
+                return null;
+            }
+            listCalls.incrementAndGet();
+            return response(message, toolsPage("only", ""));
+        };
+        McpSession session = opened(transport);
+
+        List<McpRemoteTool> tools = session.listTools(TIMEOUT);
+
+        assertEquals(List.of("only"), tools.stream().map(McpRemoteTool::name).toList());
+        assertEquals(1, listCalls.get());
+    }
+
+    @Test
+    void listToolsStopsOnRepeatedCursor() {
+        FakeMcpTransport transport = new FakeMcpTransport();
+        AtomicInteger listCalls = new AtomicInteger();
+        transport.responder = message -> {
+            if (!"tools/list".equals(message.get("method").getAsString())) {
+                return null;
+            }
+            int call = listCalls.incrementAndGet();
+            return response(message, toolsPage("t" + call, "same-cursor"));
+        };
+        McpSession session = opened(transport);
+
+        List<McpRemoteTool> tools = session.listTools(TIMEOUT);
+
+        assertEquals(List.of("t1", "t2"), tools.stream().map(McpRemoteTool::name).toList());
+        assertEquals(2, listCalls.get());
+    }
+
+    @Test
+    void listToolsStopsAtPageCap() {
+        FakeMcpTransport transport = new FakeMcpTransport();
+        AtomicInteger listCalls = new AtomicInteger();
+        transport.responder = message -> {
+            if (!"tools/list".equals(message.get("method").getAsString())) {
+                return null;
+            }
+            int call = listCalls.incrementAndGet();
+            return response(message, toolsPage("t" + call, "page-" + (call + 1)));
+        };
+        McpSession session = opened(transport);
+
+        List<McpRemoteTool> tools = session.listTools(TIMEOUT);
+
+        assertEquals(McpSession.MAX_TOOL_PAGES, listCalls.get());
+        assertEquals(McpSession.MAX_TOOL_PAGES, tools.size());
+    }
+
+    private static JsonObject toolsPage(String toolName, String nextCursor) {
+        JsonObject tool = new JsonObject();
+        tool.addProperty("name", toolName);
+        tool.add("inputSchema", new JsonObject());
+        JsonArray tools = new JsonArray();
+        tools.add(tool);
+        JsonObject result = new JsonObject();
+        result.add("tools", tools);
+        result.addProperty("nextCursor", nextCursor);
+        return result;
     }
 
     @Test

@@ -8,9 +8,11 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -218,11 +220,20 @@ public final class McpSession implements AutoCloseable {
         closeHandlers.add(Objects.requireNonNull(handler, "handler"));
     }
 
-    /** Lists every tool the server advertises, following pagination cursors. */
+    /** Upper bound on {@code tools/list} pages, so a misbehaving server cannot loop us forever. */
+    static final int MAX_TOOL_PAGES = 50;
+
+    /**
+     * Lists every tool the server advertises, following pagination cursors.
+     * A blank {@code nextCursor} means "no more pages" (DashScope sends
+     * {@code ""}); a repeated cursor or more than {@link #MAX_TOOL_PAGES} pages
+     * also ends the listing instead of re-requesting forever.
+     */
     public List<McpRemoteTool> listTools(Duration timeout) {
         List<McpRemoteTool> tools = new ArrayList<>();
+        Set<String> seenCursors = new HashSet<>();
         JsonObject params = new JsonObject();
-        while (true) {
+        for (int page = 1; ; page++) {
             JsonObject result = request("tools/list", params, timeout);
             if (result.has("tools") && result.get("tools").isJsonArray()) {
                 for (JsonElement element : result.getAsJsonArray("tools")) {
@@ -242,12 +253,22 @@ public final class McpSession implements AutoCloseable {
                     tools.add(new McpRemoteTool(tool.get("name").getAsString(), description, schema));
                 }
             }
-            if (result.has("nextCursor") && result.get("nextCursor").isJsonPrimitive()) {
-                params = new JsonObject();
-                params.addProperty("cursor", result.get("nextCursor").getAsString());
-            } else {
+            String cursor = result.has("nextCursor") && result.get("nextCursor").isJsonPrimitive()
+                    ? result.get("nextCursor").getAsString()
+                    : null;
+            if (cursor == null || cursor.isBlank()) {
                 break;
             }
+            if (!seenCursors.add(cursor)) {
+                log.warn("mcp tools/list returned a repeated cursor; stopping pagination after {} page(s)", page);
+                break;
+            }
+            if (page >= MAX_TOOL_PAGES) {
+                log.warn("mcp tools/list exceeded {} pages; stopping pagination", MAX_TOOL_PAGES);
+                break;
+            }
+            params = new JsonObject();
+            params.addProperty("cursor", cursor);
         }
         return tools;
     }
