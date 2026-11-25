@@ -58,7 +58,13 @@ final class SseContentDeltas {
             return usage == null ? null : new SseDelta(null, List.of(), usage);
         }
 
-        JsonElement deltaEl = choices.get(0).getAsJsonObject().get("delta");
+        JsonObject choice = choices.get(0).getAsJsonObject();
+        if (usage == null) {
+            // Moonshot/Kimi put usage inside the finishing choice instead of the root.
+            usage = TokenUsages.fromJson(choice.get("usage"));
+        }
+
+        JsonElement deltaEl = choice.get("delta");
         if (deltaEl == null || !deltaEl.isJsonObject()) {
             return usage == null ? null : new SseDelta(null, List.of(), usage);
         }

@@ -335,6 +335,10 @@ public class LlmClient {
         }
         if (stream) {
             body.addProperty("stream", true);
+            // Ask for the trailing usage chunk; OpenAI-compatible backends omit it otherwise.
+            JsonObject streamOptions = new JsonObject();
+            streamOptions.addProperty("include_usage", true);
+            body.add("stream_options", streamOptions);
         }
         if (maxTokens != null) {
             body.addProperty("max_tokens", maxTokens);

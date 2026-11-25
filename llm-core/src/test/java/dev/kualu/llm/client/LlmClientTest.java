@@ -709,6 +709,69 @@ class LlmClientTest {
     }
 
     @Test
+    void completeStream_kimiStreamWithUsageInChoiceAndTrailingChunk() {
+        streamBody = """
+                data: {"id":"cmpl-1","object":"chat.completion.chunk","created":1698999575,"model":"kimi-k3.1-pro","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+                data: {"id":"cmpl-1","object":"chat.completion.chunk","created":1698999575,"model":"kimi-k3.1-pro","choices":[{"index":0,"delta":{"content":"你好"},"finish_reason":null}]}
+
+                data: {"id":"cmpl-1","object":"chat.completion.chunk","created":1698999575,"model":"kimi-k3.1-pro","choices":[{"index":0,"delta":{"content":"。"},"finish_reason":null}]}
+
+                data: {"id":"cmpl-1","object":"chat.completion.chunk","created":1698999575,"model":"kimi-k3.1-pro","choices":[{"index":0,"delta":{},"finish_reason":"stop","usage":{"prompt_tokens":19,"completion_tokens":13,"total_tokens":32}}]}
+
+                data: {"id":"cmpl-1","object":"chat.completion.chunk","created":1698999575,"model":"kimi-k3.1-pro","choices":[],"usage":{"prompt_tokens":19,"completion_tokens":13,"total_tokens":32}}
+
+                data: [DONE]
+
+                """;
+
+        LlmClient client = new LlmClient(config);
+        List<String> seen = new ArrayList<>();
+        AssistantTurn turn = client.completeStream(List.of(ChatMessage.user("hi")), List.of(), seen::add);
+
+        assertEquals(List.of("你好", "。"), seen);
+        assertEquals("你好。", turn.content());
+        assertEquals(19, turn.usage().promptTokens());
+        assertEquals(13, turn.usage().completionTokens());
+        assertEquals(32, turn.usage().totalTokens());
+    }
+
+    @Test
+    void completeStream_takesUsageFromInsideTheFinishingChoice() {
+        streamBody = """
+                data: {"choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}
+
+                data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop","usage":{"prompt_tokens":19,"completion_tokens":13,"total_tokens":32}}]}
+
+                data: [DONE]
+
+                """;
+
+        LlmClient client = new LlmClient(config);
+        AssistantTurn turn = client.completeStream(List.of(ChatMessage.user("hi")), List.of(), d -> {});
+
+        assertEquals("hi", turn.content());
+        assertEquals(19, turn.usage().promptTokens());
+        assertEquals(13, turn.usage().completionTokens());
+        assertEquals(32, turn.usage().totalTokens());
+    }
+
+    @Test
+    void completeStream_requestsUsageViaStreamOptions() {
+        streamBody = """
+                data: {"choices":[{"delta":{"content":"hi"}}]}
+
+                data: [DONE]
+
+                """;
+
+        new LlmClient(config).completeStream(List.of(ChatMessage.user("hi")), List.of(), d -> {});
+
+        JsonObject body = JsonParser.parseString(capturedBody.get()).getAsJsonObject();
+        assertTrue(body.getAsJsonObject("stream_options").get("include_usage").getAsBoolean());
+    }
+
+    @Test
     void completeStream_lastReportedUsageWins() {
         streamBody = """
                 data: {"choices":[{"delta":{"content":"a"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\s
